@@ -851,7 +851,45 @@ Terse command-style prompts produce shallow, generic work.
     renderCall(args, theme) {
       const displayName = args.subagent_type ? getDisplayName(args.subagent_type) : "Agent";
       const desc = args.description ?? "";
-      return new Text("▸ " + theme.fg("toolTitle", theme.bold(displayName)) + (desc ? "  " + theme.fg("muted", desc) : ""), 0, 0);
+      const header = "▸ " + theme.fg("toolTitle", theme.bold(displayName)) + (desc ? "  " + theme.fg("muted", desc) : "");
+
+      // List all other passed args beneath the header. `description` is already in the header,
+      // the rest are shown only when the caller actually passed them (not undefined). Order is
+      // most-significant-first so the prompt and type are immediately visible.
+      const argOrder = [
+        "prompt",
+        "subagent_type",
+        "model",
+        "thinking",
+        "max_turns",
+        "run_in_background",
+        "resume",
+        "isolated",
+        "inherit_context",
+        "isolation",
+        "schedule",
+      ] as const;
+      const PROMPT_MAX = 200;
+
+      const lines = [header];
+      for (const key of argOrder) {
+        const val = args[key];
+        if (val === undefined) continue;
+        let value: string;
+        if (key === "prompt") {
+          const s = String(val);
+          // First line only, length-capped — the prompt is usually a multi-paragraph brief;
+          // showing the full thing would flood the chat.
+          const firstLine = s.split("\n", 1)[0] ?? s;
+          value = firstLine.length > PROMPT_MAX ? firstLine.slice(0, PROMPT_MAX) + "…" : firstLine;
+        } else if (typeof val === "string") {
+          value = val;
+        } else {
+          value = JSON.stringify(val);
+        }
+        lines.push("  ⎿  " + theme.fg("dim", `${key}: ${value}`));
+      }
+      return new Text(lines.join("\n"), 0, 0);
     },
 
     renderResult(result, { expanded, isPartial }, theme) {
