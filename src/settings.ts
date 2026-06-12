@@ -27,6 +27,12 @@ export interface SubagentsSettings {
    */
   schedulingEnabled?: boolean;
   /**
+   * Whether subagent sessions are persisted to disk or kept ephemeral.
+   * "in-memory" (default) — no file I/O, session lost after run.
+   * "persisted" — NDJSON session log written to the default sessions directory.
+   */
+  sessionPersistence?: "in-memory" | "persisted";
+  /**
    * When true, the effective model of each subagent spawn is validated
    * against `enabledModels` from pi's settings — both global
    * (`<agentDir>/settings.json`) and project-local (`<cwd>/.pi/settings.json`),
@@ -79,6 +85,7 @@ export interface SettingsAppliers {
   setSchedulingEnabled: (b: boolean) => void;
   setScopeModels: (enabled: boolean) => void;
   setDisableDefaultAgents: (b: boolean) => void;
+  setSessionPersistence: (mode: "in-memory" | "persisted") => void;
   setToolDescriptionMode: (mode: ToolDescriptionMode) => void;
 }
 
@@ -86,6 +93,7 @@ export interface SettingsAppliers {
 export type SettingsEmit = (event: string, payload: unknown) => void;
 
 const VALID_JOIN_MODES: ReadonlySet<string> = new Set<JoinMode>(["async", "group", "smart"]);
+const VALID_SESSION_PERSISTENCE_MODES: ReadonlySet<string> = new Set<"in-memory" | "persisted">(["in-memory", "persisted"]);
 const VALID_TOOL_DESCRIPTION_MODES: ReadonlySet<string> = new Set<ToolDescriptionMode>(["full", "compact", "custom"]);
 
 // Sanity ceilings — prevent hand-edited configs from asking for values that
@@ -135,6 +143,9 @@ function sanitize(raw: unknown): SubagentsSettings {
   }
   if (typeof r.toolDescriptionMode === "string" && VALID_TOOL_DESCRIPTION_MODES.has(r.toolDescriptionMode)) {
     out.toolDescriptionMode = r.toolDescriptionMode as ToolDescriptionMode;
+  }
+  if (typeof r.sessionPersistence === "string" && VALID_SESSION_PERSISTENCE_MODES.has(r.sessionPersistence)) {
+    out.sessionPersistence = r.sessionPersistence as "in-memory" | "persisted";
   }
   return out;
 }
@@ -194,6 +205,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
   if (typeof s.scopeModels === "boolean") appliers.setScopeModels(s.scopeModels);
   if (typeof s.disableDefaultAgents === "boolean") appliers.setDisableDefaultAgents(s.disableDefaultAgents);
   if (s.toolDescriptionMode) appliers.setToolDescriptionMode(s.toolDescriptionMode);
+  if (s.sessionPersistence) appliers.setSessionPersistence(s.sessionPersistence);
 }
 
 /**

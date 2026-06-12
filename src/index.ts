@@ -16,7 +16,7 @@ import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type Exten
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { AgentManager } from "./agent-manager.js";
-import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, steerAgent } from "./agent-runner.js";
+import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getSessionPersistence, normalizeMaxTurns, setDefaultMaxTurns, setGraceTurns, setSessionPersistence, SUBAGENT_TOOL_NAMES, steerAgent } from "./agent-runner.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, resolveType, setDefaultsDisabled } from "./agent-types.js";
 import { registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
@@ -646,6 +646,7 @@ export default function (pi: ExtensionAPI) {
       setScopeModels: setScopeModelsEnabled,
       setDisableDefaultAgents: setDisableDefaultAgents,
       setToolDescriptionMode: setToolDescriptionMode,
+      setSessionPersistence: (mode) => setSessionPersistence(mode),
     },
     (event, payload) => pi.events.emit(event, payload),
   );
@@ -1957,6 +1958,7 @@ ${systemPrompt}
       scopeModels: isScopeModelsEnabled(),
       disableDefaultAgents: isDefaultsDisabled(),
       toolDescriptionMode: getToolDescriptionMode(),
+      sessionPersistence: getSessionPersistence(),
     };
   }
 
@@ -2025,8 +2027,15 @@ ${systemPrompt}
           currentValue: getToolDescriptionMode(),
           values: ["full", "compact", "custom"],
         },
+        {
+          id: "sessionPersistence",
+          label: "Session persistence",
+          description: "Save subagent conversations to disk (persisted) or keep ephemeral (in-memory)",
+          currentValue: getSessionPersistence(),
+          values: ["in-memory", "persisted"],
+        },
       ];
-    }
+      }
 
     function applyValue(id: string, value: string) {
       if (id === "maxConcurrent") {
@@ -2076,6 +2085,9 @@ ${systemPrompt}
       } else if (id === "toolDescriptionMode") {
         setToolDescriptionMode(value as ToolDescriptionMode);
         notifyApplied(ctx, `Tool description set to ${value}. Takes effect on next pi session.`);
+      } else if (id === "sessionPersistence") {
+        setSessionPersistence(value as "in-memory" | "persisted");
+        notifyApplied(ctx, `Session persistence set to ${value}`);
       }
     }
 

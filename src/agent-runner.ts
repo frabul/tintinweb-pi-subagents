@@ -135,6 +135,14 @@ export function parseExtSelectors(entries: string[]): {
 }
 
 /** Default max turns. undefined = unlimited (no turn limit). */
+/** Session persistence: in-memory (ephemeral) or persisted (disk). Default: in-memory. */
+let sessionPersistence: "in-memory" | "persisted" = "in-memory";
+
+/** Get the current session persistence mode. */
+export function getSessionPersistence(): "in-memory" | "persisted" { return sessionPersistence; }
+/** Set the session persistence mode. */
+export function setSessionPersistence(mode: "in-memory" | "persisted"): void { sessionPersistence = mode; }
+
 let defaultMaxTurns: number | undefined;
 
 /** Normalize max turns. undefined or 0 = unlimited, otherwise minimum 1. */
@@ -541,7 +549,10 @@ export async function runAgent(
   const sessionOpts: Parameters<typeof createAgentSession>[0] = {
     cwd: effectiveCwd,
     agentDir,
-    sessionManager: SessionManager.inMemory(effectiveCwd),
+    sessionManager:
+      sessionPersistence === "persisted"
+        ? SessionManager.create(effectiveCwd)
+        : SessionManager.inMemory(effectiveCwd),
     settingsManager: SettingsManager.create(effectiveCwd, agentDir),
     modelRegistry: ctx.modelRegistry,
     model,
