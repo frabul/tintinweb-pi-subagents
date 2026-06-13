@@ -3,11 +3,15 @@
 /**
  * Lifetime usage components, accumulated via `message_end` events. Survives
  * compaction (which replaces session.state.messages and would reset any
- * stats-derived sum). cacheRead is excluded because each turn's cacheRead is
- * the cumulative cached prefix re-read on that one call — summing across
- * turns counts the prefix N times. See issue #38.
+ * stats-derived sum).
  */
-export type LifetimeUsage = { input: number; output: number; cacheWrite: number };
+export type LifetimeUsage = {
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead: number;
+  cost: number;
+};
 
 /** Sum of lifetime usage components, or 0 if undefined. */
 export function getLifetimeTotal(u?: LifetimeUsage): number {
@@ -19,18 +23,19 @@ export function addUsage(into: LifetimeUsage, delta: LifetimeUsage): void {
   into.input += delta.input;
   into.output += delta.output;
   into.cacheWrite += delta.cacheWrite;
+  into.cacheRead += delta.cacheRead;
+  into.cost += delta.cost;
 }
 
 /** Minimal shape we read from upstream `getSessionStats()`. */
 export type SessionStatsLike = {
-  tokens: { input: number; output: number; cacheWrite: number };
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextUsage?: { percent: number | null };
 };
 export type SessionLike = { getSessionStats(): SessionStatsLike };
 
 /**
- * Session-scoped token count: input + output + cacheWrite as reported by
- * upstream `getSessionStats().tokens` for the *current* session window.
+ * Session-scoped weighted token count (same formula as getLifetimeTotal).
  *
  * RESETS at compaction — upstream replaces `session.state.messages` and the
  * stats are derived from that array. For a lifetime total that survives

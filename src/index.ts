@@ -73,7 +73,7 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
     maxTurns,
     responseText: "",
     session: undefined,
-    lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+    lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 },
   };
 
   const callbacks = {
@@ -99,7 +99,10 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
     onSessionCreated: (session: any) => {
       state.session = session;
     },
-    onAssistantUsage: (usage: { input: number; output: number; cacheWrite: number }) => {
+    onAssistantUsage: (usage: {
+      input: number; output: number; cacheWrite: number; cacheRead: number;
+      cost: number;
+    }) => {
       addUsage(state.lifetimeUsage, usage);
       onStreamUpdate?.();
     },
@@ -339,15 +342,12 @@ export default function (pi: ExtensionAPI) {
   /** Helper: build event data for lifecycle events from an AgentRecord. */
   function buildEventData(record: AgentRecord) {
     const durationMs = record.completedAt ? record.completedAt - record.startedAt : Date.now() - record.startedAt;
-    // All three fields are lifetime-accumulated (Σ over every assistant message_end),
-    // so they survive compaction together — input + output ≤ total always.
-    // tokens is omitted when nothing was ever produced (e.g. agent errored before
-    // any message_end fired), preserving prior payload shape.
     const u = record.lifetimeUsage;
     const total = getLifetimeTotal(u);
     const tokens = total > 0
-      ? { input: u.input, output: u.output, total }
+      ? { input: u.input, output: u.output, cacheWrite: u.cacheWrite, cacheRead: u.cacheRead, total }
       : undefined;
+    const cost = u.cost > 0 ? u.cost : undefined;
     return {
       id: record.id,
       type: record.type,
@@ -358,6 +358,7 @@ export default function (pi: ExtensionAPI) {
       toolUses: record.toolUses,
       durationMs,
       tokens,
+      cost,
     };
   }
 
