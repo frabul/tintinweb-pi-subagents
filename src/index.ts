@@ -1005,13 +1005,36 @@ Terse command-style prompts produce shallow, generic work.
 
       const resolvedConfig = resolveAgentInvocationConfig(customConfig, params);
 
-      // Resolve model from agent config first; tool-call params only fill gaps.
+      // Resolve model: caller-supplied `params.model` wins (it's an override),
+      // frontmatter `agentConfig.model` is the default. Fail loud when the
+      // resolved string doesn't match a known model, fallback to current model
+      // only if model was provided by frontmatter
       let model = ctx.model;
       if (resolvedConfig.modelInput) {
-        const resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
+        let resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
+
         if (typeof resolved === "string") {
-          if (resolvedConfig.modelFromParams) return textResult(resolved);
-          // config-specified: silent fallback to parent
+          // error — build error details so renderResult shows red ✗
+          // Fail only if the model was provided
+          if (resolvedConfig.modelFromParams) {
+            let errMsg = typeof resolved === "string" ? resolved : String(resolved);
+            if (errMsg.length > 500)
+                errMsg = errMsg.slice(0, 500) + "\n... (truncated)";
+            if (errMsg.split("\n").length > 5) {
+                errMsg = (errMsg.split("\n").slice(0, 5).join("\n") + "\n... (truncated)");
+            }
+            const errDetails: AgentDetails = {
+                displayName: getDisplayName(subagentType),
+                description: params.description as string,
+                subagentType,
+                toolUses: 0,
+                tokens: "",
+                durationMs: 0,
+                status: "error",
+                error: "Unknown model requested " + resolvedConfig.modelInput,
+            };
+            return textResult(errMsg, errDetails);
+          }
         } else {
           model = resolved;
         }
