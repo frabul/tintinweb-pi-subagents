@@ -13,9 +13,9 @@ export type LifetimeUsage = {
   cost: number;
 };
 
-/** Sum of lifetime usage components, or 0 if undefined. */
+/** Weighted token score: 3× output + input + 0.2× cacheRead + cacheWrite. */
 export function getLifetimeTotal(u?: LifetimeUsage): number {
-  return u ? u.input + u.output + u.cacheWrite : 0;
+  return u ? Math.round(3 * u.output + u.input + 0.2 * u.cacheRead + u.cacheWrite) : 0;
 }
 
 /** Add a usage delta into a target accumulator (mutates target). */
@@ -42,15 +42,15 @@ export type SessionLike = { getSessionStats(): SessionStatsLike };
  * compaction, use `getLifetimeTotal(lifetimeUsage)` instead, which reads
  * from an independent accumulator fed by `message_end` events.
  *
- * Avoids upstream's `tokens.total` field, which sums per-turn `cacheRead`
- * and so counts the cumulative cached prefix N times across N turns
- * (issue #38).
+ * The upstream `tokens.total` field sums per-turn `cacheRead` and counts
+ * the cumulative cached prefix N times across N turns (issue #38), so we
+ * compute our own weighted total instead.
  */
 export function getSessionTokens(session: SessionLike | undefined): number {
   if (!session) return 0;
   try {
     const t = session.getSessionStats().tokens;
-    return t.input + t.output + t.cacheWrite;
+    return Math.round(3 * t.output + t.input + 0.2 * t.cacheRead + t.cacheWrite);
   } catch { return 0; }
 }
 
