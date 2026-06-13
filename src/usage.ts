@@ -29,8 +29,8 @@ export function addUsage(into: LifetimeUsage, delta: LifetimeUsage): void {
 
 /** Minimal shape we read from upstream `getSessionStats()`. */
 export type SessionStatsLike = {
-  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  contextUsage?: { percent: number | null };
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  contextUsage?: { percent: number | null; tokens: number | null; contextWindow?: number };
 };
 export type SessionLike = { getSessionStats(): SessionStatsLike };
 
@@ -62,4 +62,12 @@ export function getSessionContextPercent(session: SessionLike | undefined): numb
   if (!session) return null;
   try { return session.getSessionStats().contextUsage?.percent ?? null; }
   catch { return null; }
+}
+
+/** Current context-window length from session stats (input + output). */
+export function getSessionContextLength(session: SessionLike | undefined): number {
+  if (!session) return 0;
+  try {
+    return session.getSessionStats().contextUsage?.tokens ?? 0;
+  } catch { return 0; }
 }

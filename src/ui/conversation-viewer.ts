@@ -9,9 +9,9 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { type Component, matchesKey, type TUI, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { extractText } from "../context.js";
 import type { AgentRecord } from "../types.js";
-import { getLifetimeTotal, getSessionContextPercent } from "../usage.js";
+import { getLifetimeTotal, getSessionContextPercent, getSessionContextLength } from "../usage.js";
 import type { Theme } from "./agent-widget.js";
-import { type AgentActivity, buildInvocationTags, describeActivity, formatDuration, formatSessionTokens, getDisplayName, getPromptModeLabel } from "./agent-widget.js";
+import { type AgentActivity, buildInvocationTags, describeActivity, formatCost, formatCount, formatDuration, formatSessionTokens, getDisplayName, getPromptModeLabel } from "./agent-widget.js";
 import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./viewer-keys.js";
 
 /** Base lines consumed by chrome: top border + header + header sep + footer sep + footer + bottom border. */
@@ -127,7 +127,6 @@ export class ConversationViewer implements Component {
           ? th.fg("error", "✗")
           : th.fg("dim", "○");
     const duration = formatDuration(this.record.startedAt, this.record.completedAt);
-
     const headerParts: string[] = [duration];
     const toolUses = this.activity?.toolUses ?? this.record.toolUses;
     if (toolUses > 0) headerParts.unshift(`${toolUses} tool${toolUses === 1 ? "" : "s"}`);
@@ -136,6 +135,12 @@ export class ConversationViewer implements Component {
       const percent = getSessionContextPercent(this.activity?.session);
       headerParts.push(formatSessionTokens(tokens, percent, th, this.record.compactionCount));
     }
+    const cost = this.activity?.lifetimeUsage.cost ?? this.record.lifetimeUsage.cost;
+    const costText = cost > 0 ? formatCost(cost) : "";
+    const rawTotal = getSessionContextLength(this.activity?.session ?? this.record.session);
+    const rawTotalText = rawTotal > 0 ? `${formatCount(rawTotal)} ctx` : "";
+    if (costText) headerParts.push(costText);
+    if (rawTotalText) headerParts.push(rawTotalText);
 
     lines.push(row(
       `${statusIcon} ${th.bold(name)}${modeTag}  ${th.fg("muted", this.record.description)} ${th.fg("dim", "·")} ${th.fg("dim", headerParts.join(" · "))}`,

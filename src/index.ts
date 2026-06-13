@@ -38,6 +38,7 @@ import {
   describeActivity,
   formatDuration,
   formatMs,
+  formatCost,
   formatTokens,
   formatTurns,
   getDisplayName,
@@ -1551,7 +1552,19 @@ Terse command-style prompts produce shallow, generic work.
       ctx.ui.notify(noAgentsMsg, "info");
     }
 
-    const choice = await ctx.ui.select("Agents", options);
+      // Session total: aggregate stats across all agents
+    let title = "Agents";
+    const totalUsage: LifetimeUsage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0 };
+    for (const a of agents) addUsage(totalUsage, a.lifetimeUsage);
+    const totalTokens = getLifetimeTotal(totalUsage);
+    const statParts: string[] = [];
+    if (totalTokens > 0) statParts.push(formatTokens(totalTokens));
+    if (totalUsage.cost > 0) statParts.push(formatCost(totalUsage.cost));
+    const totalToolUses = agents.reduce((s, a) => s + a.toolUses, 0);
+    if (totalToolUses > 0) statParts.push(`${totalToolUses} tool use${totalToolUses === 1 ? "" : "s"}`);
+    if (statParts.length > 0)
+      title += (`\n  Session total: ${statParts.join(" · ")}`);
+    const choice = await ctx.ui.select(title, options);
     if (!choice) return;
 
     if (choice.startsWith("Running agents (")) {

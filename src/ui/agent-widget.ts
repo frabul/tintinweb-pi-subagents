@@ -9,7 +9,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { AgentManager } from "../agent-manager.js";
 import { getConfig } from "../agent-types.js";
 import type { AgentInvocation, SubagentType } from "../types.js";
-import { getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.js";
+import { getLifetimeTotal, getSessionContextPercent, getSessionContextLength, type LifetimeUsage, type SessionLike } from "../usage.js";
 
 // ---- Constants ----
 
@@ -97,6 +97,21 @@ export function formatTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M token`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k token`;
   return `${count} token`;
+}
+
+/** Format a raw count without suffix: "15.2k", "1.2M". */
+export function formatCount(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
+  return `${count}`;
+}
+
+/** Format monetary cost: "$0.0042" or empty string when zero. */
+export function formatCost(cost: number): string {
+  if (cost <= 0) return "";
+  if (cost >= 1) return `$${cost.toFixed(2)}`;
+  if (cost >= 0.01) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(6)}`;
 }
 
 /**
@@ -356,14 +371,18 @@ export class AgentWidget {
       const tokens = getLifetimeTotal(bg?.lifetimeUsage);
       const contextPercent = getSessionContextPercent(bg?.session);
       const tokenText = tokens > 0 ? formatSessionTokens(tokens, contextPercent, theme, a.compactionCount) : "";
+      const costText = bg?.lifetimeUsage.cost ? formatCost(bg.lifetimeUsage.cost) : "";
+      const rawTotal = getSessionContextLength(bg?.session);
+      const rawTotalText = rawTotal > 0 ? `${formatCount(rawTotal)} ctx` : "";
 
       const parts: string[] = [];
       if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
       if (toolUses > 0) parts.push(`${toolUses} tool use${toolUses === 1 ? "" : "s"}`);
       if (tokenText) parts.push(tokenText);
+      if (rawTotalText) parts.push(rawTotalText);
+      if (costText) parts.push(costText);
       parts.push(elapsed);
       const statsText = parts.join(" · ");
-
       const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
 
       runningLines.push([
