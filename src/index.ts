@@ -154,7 +154,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number): stri
 
 /** Build AgentDetails from a base + record-specific fields. */
 function buildDetails(
-  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "tags">,
+  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "resolvedModel" | "tags">,
   record: { toolUses: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; lifetimeUsage: LifetimeUsage },
   activity?: AgentActivity,
   overrides?: Partial<AgentDetails>,
@@ -911,6 +911,11 @@ Terse command-style prompts produce shallow, generic work.
         if (d.tokens) parts.push(d.tokens);
         return parts.map(p => theme.fg("dim", p)).join(" " + theme.fg("dim", "·") + " ");
       };
+      // Sub-line showing the full provider/modelId actually used by the spawned
+      // session. Always included (when known) so the chat can confirm resolution,
+      // not just when it differs from the parent.
+      const resolvedModelLine = (d: AgentDetails) =>
+        d.resolvedModel ? "\n" + theme.fg("dim", `  ⎿  model: ${d.resolvedModel}`) : "";
 
       // ---- While running (streaming) ----
       if (isPartial || details.status === "running") {
@@ -923,10 +928,13 @@ Terse command-style prompts produce shallow, generic work.
 
       // ---- Background agent launched ----
       if (details.status === "background") {
-        return new Text(theme.fg("dim", `  ⎿  Running in background (ID: ${details.agentId})`), 0, 0);
+        return new Text(theme.fg("dim", `  ⎿  Running in background (ID: ${details.agentId})`) + resolvedModelLine(details), 0, 0);
       }
 
       // ---- Completed / Steered ----
+      if (details.status === "completed" || details.status === "steered") {
+        const duration = formatMs(details.durationMs);
+        const isSteered = details.status === "steered";
       if (details.status === "completed" || details.status === "steered") {
         const duration = formatMs(details.durationMs);
         const isSteered = details.status === "steered";
@@ -934,7 +942,7 @@ Terse command-style prompts produce shallow, generic work.
         const s = stats(details);
         let line = icon + (s ? " " + s : "");
         line += " " + theme.fg("dim", "·") + " " + theme.fg("dim", duration);
-
+        line += resolvedModelLine(details);
         if (expanded) {
           const resultText = result.content[0]?.type === "text" ? result.content[0].text : "";
           if (resultText) {
@@ -952,19 +960,21 @@ Terse command-style prompts produce shallow, generic work.
         }
         return new Text(line, 0, 0);
       }
+      }
 
       // ---- Stopped (user-initiated abort) ----
       if (details.status === "stopped") {
         const s = stats(details);
         let line = theme.fg("dim", "■") + (s ? " " + s : "");
         line += "\n" + theme.fg("dim", "  ⎿  Stopped");
+        line += resolvedModelLine(details);
         return new Text(line, 0, 0);
       }
 
       // ---- Error / Aborted (hard max_turns) ----
       const s = stats(details);
       let line = theme.fg("error", "✗") + (s ? " " + s : "");
-
+      line += resolvedModelLine(details);
       if (details.status === "error") {
         line += "\n" + theme.fg("error", `  ⎿  Error: ${details.error ?? "unknown"}`);
       } else {
@@ -1047,6 +1057,10 @@ Terse command-style prompts produce shallow, generic work.
       const modelName = effectiveModelId && effectiveModelId !== parentModelId
         ? (model?.name ?? effectiveModelId).replace(/^Claude\s+/i, "").toLowerCase()
         : undefined;
+      // Full provider/modelId of what the spawned session will actually use.
+      // Always populated (when a model exists) so the chat can show the final
+      // resolved model even when it matches the parent.
+      const resolvedModel = model ? `${model.provider}/${model.id}` : undefined;
       const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
       const agentInvocation: AgentInvocation = {
         modelName,
@@ -1068,6 +1082,7 @@ Terse command-style prompts produce shallow, generic work.
         description: params.description,
         subagentType,
         modelName,
+        resolvedModel,
         tags: agentTags.length > 0 ? agentTags : undefined,
       };
 

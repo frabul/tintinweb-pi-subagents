@@ -78,6 +78,8 @@ export interface AgentDetails {
   spinnerFrame?: number;
   /** Short model name if different from parent (e.g. "haiku", "sonnet"). */
   modelName?: string;
+  /** Fully-resolved `provider/modelId` actually used by the spawned session, regardless of whether it matches the parent. */
+  resolvedModel?: string;
   /** Notable config tags (e.g. ["thinking: high", "isolated"]). */
   tags?: string[];
   /** Current turn count. */
