@@ -12,7 +12,7 @@
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
+import { defineTool, parseFrontmatter, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { AgentManager } from "./agent-manager.js";
@@ -1483,6 +1483,144 @@ Terse command-style prompts produce shallow, generic work.
         );
       } catch (err) {
         return textResult(`Failed to steer agent: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  }));
+
+  // ---- agent_info tool ----
+  pi.registerTool(defineTool({
+    name: SUBAGENT_TOOL_NAMES.AGENT_INFO,
+    label: "Sub-Agents Info",
+    description:
+      "Query Sub-Agent system information. Use `sub` to select the type of information.",
+    promptSnippet: "Get agent system info (list, guidelines, create instructions, frontmatter)",
+    parameters: Type.Object({
+      sub: Type.Union([
+        Type.Literal("guidelines", { description: "Return the full agents tool usage guidelines" }),
+        Type.Literal("create", { description: "Return instructions for creating custom agents" }),
+        Type.Literal("list", { description: "List all defined agents with their descriptions" }),
+        Type.Literal("info", { description: "Return the frontmatter of a specific agent" }),
+      ]),
+      name: Type.Optional(Type.String({
+        description: "Agent name (required when sub is 'info')",
+      })),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      switch (params.sub) {
+        case "guidelines":
+          return textResult(fullAgentToolDescription);
+        case "create": {
+          const projectDir = join(process.cwd(), ".pi", "agents");
+          const personalDir = join(getAgentDir(), "agents");
+          return textResult(
+            "# Creating Custom Agents\n\n" +
+            "Custom agents are defined as markdown files with YAML frontmatter in:\n" +
+            `- **Project**: ${projectDir}/<name>.md\n` +
+            `- **Global**: ${personalDir}/<name>.md\n` +
+            "\nProject-level agents override global ones with the same name.\n\n" +
+            "Use write tool to create/edit project subagents manually. \n" +
+            "Create or modify global subagents only if requested by the user \n" +
+            "## File Format\n\n" +
+            "```markdown\n" +
+            "---\n" +
+            "description: One-line description shown in the UI\n" +
+            "tools: read, bash, edit, write, grep, find, ls\n" +
+            "model: anthropic/claude-haiku-4-5-20251001\n" +
+            "prompt_mode: replace\n" +
+            "---\n\n" +
+            "<system prompt body>\n" +
+            "```\n\n" +
+            "## Frontmatter Fields\n\n" +
+            "- **description** (required) — one-line description\n" +
+            "- **display_name** — optional display name\n" +
+            "- **tools** — comma-separated built-in tool names, \"all\" for all, \"none\" for none\n" +
+            "- **model** — model to use, e.g. \"anthropic/claude-haiku-4-5-20251001\". Omit to inherit parent model\n" +
+            "- **thinking** — thinking level: off, minimal, low, medium, high, xhigh\n" +
+            "- **max_turns** — max agentic turns (0 = unlimited)\n" +
+            "- **prompt_mode** — \"replace\" (body replaces the whole system prompt) or \"append\" (body is appended)\n" +
+            "- **extensions** — true (inherit all), false (none), or comma-separated names\n" +
+            "- **skills** — true (inherit all), false (none), or comma-separated names\n" +
+            "- **inherit_context** — true to fork parent conversation into the agent\n" +
+            "- **run_in_background** — true to run in background by default\n" +
+            "- **isolated** — true for no MCP/extension tools\n" +
+            "- **memory** — \"user\", \"project\", or \"local\" for persistent memory\n" +
+            "- **isolation** — \"worktree\" to run in isolated git worktree\n" +
+            "- **enabled** — false to disable the agent\n\n"
+          );
+        }
+        case "list": {
+          const names = getAllTypes();
+          const lines = names
+              .filter(name => getAgentConfig(name)?.enabled !== false)
+              .map(name => {
+                const cfg = getAgentConfig(name);
+                const src = cfg?.source === "project" ? "•" : cfg?.source === "global" ? "◦" : " ";
+                const desc = cfg?.description ?? name;
+                const model = cfg?.model ? ` (${getModelLabelFromConfig(cfg.model)})` : "";
+                return `${src} ${name} - ${model} — ${desc}`;
+              });
+          return textResult(
+            "# Defined Agents\n\n" +
+            (lines.length > 0 ? lines.join("\n") : "No agents defined.") +
+            "\n\n• = project  ◦ = global  [disabled] = disabled"
+          );
+        }
+        case "info": {
+          const agentName = params.name;
+          if (!agentName) {
+            return textResult("Error: 'name' parameter is required when sub is 'info'.");
+          }
+          const file = findAgentFile(agentName);
+          const cfg = getAgentConfig(agentName);
+          if (!file && !cfg) {
+            return textResult(`Agent not found: "${agentName}". Use sub: "list" to see all defined agents.`);
+          }
+          if (file) {
+            try {
+              const content = readFileSync(file.path, "utf-8");
+
+              const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
+              const fmLines = Object.entries(frontmatter).map(([k, v]) => {
+                if (typeof v === 'string') return `${k}: ${v}`;
+                return `${k}: ${JSON.stringify(v)}`;
+              });
+              return textResult(
+                `# Agent: ${agentName} (${file.location})\n\n` +
+                `---\n${fmLines.join("\n")}\n---`
+              );
+            } catch (err) {
+              return textResult(`Error reading agent file ${file.path}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+          // Fallback: show config from registry (default agents without a file)
+          const isDefault = cfg?.isDefault ? " (default)" : "";
+          const source = cfg?.source ? ` (${cfg.source})` : "";
+          const disabled = cfg?.enabled === false ? " [disabled]" : "";
+          const model = cfg?.model ?? "inherit";
+          const tools = cfg?.builtinToolNames?.join(", ") ?? "all";
+          const ext = cfg?.extensions === true ? "true" : cfg?.extensions === false ? "false" : cfg?.extensions?.join(", ") ?? "true";
+          const skills = cfg?.skills === true ? "true" : cfg?.skills === false ? "false" : cfg?.skills?.join(", ") ?? "true";
+          const thinking = cfg?.thinking ?? "inherit";
+          const maxTurns = cfg?.maxTurns != null ? String(cfg.maxTurns) : "inherit";
+          const memory = cfg?.memory ?? "none";
+          const isolation = cfg?.isolation ?? "none";
+          return textResult(
+            `# Agent: ${agentName}${isDefault}${source}${disabled}\n\n` +
+            `---\n` +
+            `description: ${cfg?.description ?? agentName}\n` +
+            `model: ${model}\n` +
+            `tools: ${tools}\n` +
+            `extensions: ${ext}\n` +
+            `skills: ${skills}\n` +
+            `thinking: ${thinking}\n` +
+            `max_turns: ${maxTurns}\n` +
+            `memory: ${memory}\n` +
+            `isolation: ${isolation}\n` +
+            `---`
+          );
+        }
+        default:
+          return textResult(`Unknown sub: \"${params.sub}\". Valid values: guidelines, create, list, info`);
       }
     },
   }));

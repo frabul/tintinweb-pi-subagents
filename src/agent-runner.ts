@@ -35,6 +35,7 @@ export const SUBAGENT_TOOL_NAMES = {
   AGENT: "Agent",
   GET_RESULT: "get_subagent_result",
   STEER: "steer_subagent",
+  AGENT_INFO: "agent_info",
 } as const;
 
 /** Names of tools registered by this extension that subagents must NOT inherit. */
@@ -418,7 +419,6 @@ export async function runAgent(
             }),
           };
         };
-
   const loader = new DefaultResourceLoader({
     cwd: effectiveCwd,
     agentDir,
