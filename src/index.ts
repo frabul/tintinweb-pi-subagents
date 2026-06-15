@@ -680,60 +680,55 @@ export default function (pi: ExtensionAPI) {
   // Compact Agent tool description (#91, `toolDescriptionMode: "compact"`) —
   // the same load-bearing facts as the full version at ~75% fewer tokens, for
   // small/local models. Per-option details live in the param descriptions.
-  const compactAgentToolDescription = `Launch an autonomous agent for complex, multi-step tasks. Agent types:
-${buildCompactTypeListText()}
+  const compactAgentToolDescription = `Launch an autonomous sub-agent for complex, multi-step tasks.
+Use tool \`agent_info('guidelines')\` for detailed information when needed.`;
 
-Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.md (global).
+  const fullAgentToolDescription = `# Agents
 
-Notes:
-- description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
-- Parallel work: one message, multiple Agent calls, run_in_background: true on each. You are notified when background agents finish — never poll or sleep.
-- The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
-- resume continues a previous agent by ID; steer_subagent messages a running one.
-- isolation: "worktree" runs the agent in an isolated git worktree; changes land on a branch.`;
-
-  const fullAgentToolDescription = `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
-
-Available agent types and the tools they have access to:
-${buildTypeListText()}
-
-Custom agents can be defined in .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.md (global) — they are picked up automatically. Project-level agents override global ones. Creating a .md file with the same name as a default agent overrides it.
-
+You can launch new agents to help you to complete your task without cluttering your context window.
+If you haven't already done or if explicitly requested, inspect the available agents and their capabilities
+using tool "agents_info('list')", and check which one of them most fits the task you want to delegate.
 When using the Agent tool, specify a subagent_type parameter to select which agent type to use.
+If the user ask to create a custom agent, obtain instructions using "agents_info('create')".
 
-## When not to use
-
-If the target is already known, use a direct tool — \`read\` for a known path, \`grep\`/\`find\` for a specific symbol or string. Reserve this tool for open-ended questions that span the codebase, or tasks that match an available agent type.
-
-## Usage notes
+## Guidelines
 
 - Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
 - When you launch multiple agents for independent work, send them in a single message with multiple tool uses, with run_in_background: true on each, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls. Foreground calls run sequentially — only one executes at a time.
 - When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
-- Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting work as done.
-- Use run_in_background for work you don't need immediately. You will be notified when it completes — do NOT poll or sleep waiting for it. Continue with other work or respond to the user instead.
-- Foreground vs background: use foreground (default) when you need the agent's results before you can proceed. Use background when you have genuinely independent work to do in parallel.
-- Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
+- When an agent runs in the background, you will be notified on completion — do not poll or sleep waiting for it. Continue with other work instead.
+- For broad codebase exploration or research, spawn Agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.
+- If you set run_in_background, you will be notified when it completes — do NOT poll or sleep waiting for it.
+- Use resume to continue the conversation with an agent that completed its task.
 - Use steer_subagent to send mid-run messages to a running background agent.
-- Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
-- If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
-- Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
-- Use thinking to control extended thinking level.
 - Use inherit_context if the agent needs the parent conversation history.
-- Use isolation: "worktree" to run the agent in an isolated git worktree (safe parallel file modifications). The worktree is automatically cleaned up if the agent makes no changes; otherwise the path and branch are returned in the result.${scheduleGuideline}
+- Split complex tasks into simpler subtasks to assign to multiple agents. Example: if a task involves implementation then testing, assign one agent to implementation and another to testing.
+- Verify the work done by subagents. Verification can eventually be delegated to another agent.
 
 ## Writing the prompt
 
-Provide clear, detailed prompts so the agent can work autonomously. Brief it like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
-- Explain what you're trying to accomplish and why.
-- Describe what you've already learned or ruled out.
-- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.
-- If you need a short response, say so ("report in under 200 words").
-- Lookups: hand over the exact command. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.
+- Give enough context about the surrounding problem so that the agent can make judgment calls rather than just guessing.
+- Describe what you've already learned or ruled out, so that the agent doesn't need to repeat the same work.
+- Provide clear, detailed prompts so the agent can work autonomously.
+- Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
+- When you assign an implementation task, mention the known implementation details (strategy, modules to change, etc.) to avoid unnecessary research by the subagent.
+- Add constrains. Example: "Only change this file, don't add new dependencies, etc."
+- If all information is already in one or more files, provide the reference to the files instead.
 
-Terse command-style prompts produce shallow, generic work.
+## What to delegate vs do directly
 
-**Never delegate understanding.** Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.`;
+If the target is already known, use a direct tool — "read" for a known path, "grep"/"find" for a specific symbol or string. Reserve this tool for open-ended questions that span the codebase, or tasks that require multi-step reasoning and could clutter the context window with intermediate steps and findings which are not relevant for the big picture.
+
+Delegate to subagents:
+- Independent implementation tasks (e.g. refactor package A)
+- Test writing after implementation
+- Validation of the execution of some task
+- Codebase exploration / research
+
+Do directly:
+- Quick edits (one-liners, config changes)
+- reading files you already have anchors for
+- grep/find for specific known targets (e.g. "Where is function X defined?")`;
 
   // `toolDescriptionMode: "custom"` — user-authored description with live
   // dynamic parts. Project file wins over global; missing/empty falls back to
@@ -773,13 +768,12 @@ Terse command-style prompts produce shallow, generic work.
 
   const agentToolDescription = (() => {
     const mode = getToolDescriptionMode();
-    if (mode === "compact") return compactAgentToolDescription;
     if (mode === "custom") {
       const custom = loadCustomToolDescription();
       if (custom) return custom;
       console.warn('[pi-subagents] toolDescriptionMode is "custom" but no agent-tool-description.md found — using "full"');
     }
-    return fullAgentToolDescription;
+    return compactAgentToolDescription;
   })();
 
   pi.registerTool(defineTool({
@@ -787,12 +781,6 @@ Terse command-style prompts produce shallow, generic work.
     label: "Agent",
     description: agentToolDescription,
     promptSnippet: "Launch autonomous sub-agents for complex multi-step tasks",
-    promptGuidelines: [
-      "Use Agent with specialized agents when the task matches an agent type's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing — if you delegate research to a subagent, do not also perform the same searches yourself.",
-      "For broad codebase exploration or research, spawn Agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.",
-      "When an agent runs in the background, you will be notified on completion — do not poll or sleep waiting for it. Continue with other work instead.",
-      "Trust but verify: an agent's summary describes intent, not outcome. When an agent writes or edits code, check the actual changes before reporting work as done.",
-    ],
     parameters: Type.Object({
       prompt: Type.String({
         description: "The task for the agent to perform.",
