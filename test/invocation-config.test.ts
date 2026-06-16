@@ -72,7 +72,7 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.modelFromParams).toBe(true);
     expect(resolved.thinking).toBe("minimal");
     expect(resolved.maxTurns).toBe(3);
-    expect(resolved.inheritContext).toBe(true);
+    expect(resolved.inheritContext).toBe("summary");
     expect(resolved.runInBackground).toBe(true);
     expect(resolved.isolated).toBe(true);
     expect(resolved.isolation).toBe("worktree");
@@ -92,7 +92,7 @@ describe("resolveAgentInvocationConfig", () => {
       },
     );
 
-    expect(resolved.inheritContext).toBe(true);
+    expect(resolved.inheritContext).toBe("summary");
     expect(resolved.runInBackground).toBe(true);
     expect(resolved.isolated).toBe(true);
   });

@@ -58,7 +58,7 @@ You are a security auditor.`);
     expect(agent.thinking).toBe("high");
     expect(agent.maxTurns).toBe(30);
     expect(agent.promptMode).toBe("replace");
-    expect(agent.inheritContext).toBe(true);
+    expect(agent.inheritContext).toBe("summary");
     expect(agent.runInBackground).toBe(true);
     expect(agent.isolated).toBe(true);
     expect(agent.systemPrompt).toBe("You are a security auditor.");

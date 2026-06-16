@@ -824,10 +824,14 @@ Do directly:
         }),
       ),
       inherit_context: Type.Optional(
-        Type.Boolean({
-          description: "If true, fork parent conversation into the agent. Default: false (fresh context).",
-        }),
-      ),
+        Type.Union([
+          Type.Literal("summary", {
+            description: "Summarize parent conversation context into the agent (skips tool results).",
+          }),
+          Type.Literal("fork", {
+            description: "Fork the full parent conversation into the agent, including tool calls and results.",
+          }),
+        ])),
       isolation: Type.Optional(
         Type.Literal("worktree", {
           description: 'Set to "worktree" to run the agent in a temporary git worktree (isolated copy of the repo). Changes are saved to a branch on completion.',
@@ -1528,7 +1532,7 @@ Do directly:
             "- **prompt_mode** — \"replace\" (body replaces the whole system prompt) or \"append\" (body is appended)\n" +
             "- **extensions** — true (inherit all), false (none), or comma-separated names\n" +
             "- **skills** — true (inherit all), false (none), or comma-separated names\n" +
-            "- **inherit_context** — true to fork parent conversation into the agent\n" +
+            "- **inherit_context** — false (no context), \"summary\" (text summary of parent, skips tool results), or \"fork\" (full fork including tool calls and results)\n" +
             "- **run_in_background** — true to run in background by default\n" +
             "- **isolated** — true for no MCP/extension tools\n" +
             "- **memory** — \"user\", \"project\", or \"local\" for persistent memory\n" +
@@ -1908,7 +1912,8 @@ Do directly:
     if (cfg.skills === false) fmFields.push("skills: false");
     else if (Array.isArray(cfg.skills)) fmFields.push(`skills: ${cfg.skills.join(", ")}`);
     if (cfg.disallowedTools?.length) fmFields.push(`disallowed_tools: ${cfg.disallowedTools.join(", ")}`);
-    if (cfg.inheritContext) fmFields.push("inherit_context: true");
+    if (cfg.inheritContext === "fork") fmFields.push("inherit_context: fork");
+    else if (cfg.inheritContext) fmFields.push("inherit_context: true");
     if (cfg.runInBackground) fmFields.push("run_in_background: true");
     if (cfg.isolated) fmFields.push("isolated: true");
     if (cfg.memory) fmFields.push(`memory: ${cfg.memory}`);
@@ -2034,7 +2039,7 @@ prompt_mode: <"replace" (body IS the full system prompt) or "append" (body is ap
 extensions: <true (inherit all MCP/extension tools), false (none), or comma-separated names. Default: true>
 skills: <true (inherit all), false (none), or comma-separated skill names to preload into prompt. Default: true>
 disallowed_tools: <comma-separated tool names to block, even if otherwise available. Omit for none>
-inherit_context: <true to fork parent conversation into agent so it sees chat history. Default: false>
+inherit_context: <false (no context), "summary" (text summary, skips tool results), or "fork" (full conversation including tool call/results). Default: false>
 run_in_background: <true to run in background by default. Default: false>
 isolated: <true for no extension/MCP tools, only built-in tools. Default: false>
 memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit for none>
@@ -2049,7 +2054,7 @@ Guidelines for choosing settings:
 - For code modification tasks: include edit, write
 - Use prompt_mode: append if the agent should keep the default system prompt and add specialization on top
 - Use prompt_mode: replace for fully custom agents with their own personality/instructions
-- Set inherit_context: true if the agent needs to know what was discussed in the parent conversation
+- Set inherit_context to "summary" or "fork" if the agent needs to know what was discussed in the parent conversation
 - Set isolated: true if the agent should NOT have access to MCP servers or other extensions
 - Only include frontmatter fields that differ from defaults — omit fields where the default is fine
 

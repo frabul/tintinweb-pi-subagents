@@ -17,7 +17,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getConfig, getMemoryToolNames, getReadOnlyMemoryToolNames, getToolNamesForType } from "./agent-types.js";
-import { buildParentContext, extractText } from "./context.js";
+import { buildFullContext, buildParentContext, extractText } from "./context.js";
 import { DEFAULT_AGENTS } from "./default-agents.js";
 import { detectEnv } from "./env.js";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
@@ -213,7 +213,7 @@ export interface RunOptions {
   maxTurns?: number;
   signal?: AbortSignal;
   isolated?: boolean;
-  inheritContext?: boolean;
+  inheritContext?: false | "summary" | "fork";
   thinkingLevel?: ThinkingLevel;
   /** Override working directory (e.g. for worktree isolation). */
   cwd?: string;
@@ -550,14 +550,32 @@ export async function runAgent(
     // (`ext:` opt-in flip), so any extension tool in `extensionToolNames` is allowed.
     return !noExtensions;
   });
+  // Fork mode: create a branched session file from the parent's current leaf
+  let forkedSessionManager: SessionManager | undefined;
+  if (options.inheritContext === "fork") {
+    const leafId = ctx.sessionManager.getLeafId();
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    if (leafId && sessionFile) {
+      try {
+        const parentSM = SessionManager.open(sessionFile, ctx.sessionManager.getSessionDir(), ctx.cwd);
+        const branchedPath = parentSM.createBranchedSession(leafId);
+        if (branchedPath) {
+          forkedSessionManager = SessionManager.open(branchedPath, undefined, effectiveCwd);
+        }
+      } catch {
+        // Fall through to text-based fallback
+      }
+    }
+  }
 
   const sessionOpts: Parameters<typeof createAgentSession>[0] = {
     cwd: effectiveCwd,
     agentDir,
-    sessionManager:
+    sessionManager: forkedSessionManager ?? (
       sessionPersistence === "persisted"
         ? SessionManager.create(effectiveCwd)
-        : SessionManager.inMemory(effectiveCwd),
+        : SessionManager.inMemory(effectiveCwd)
+    ),
     settingsManager: SettingsManager.create(effectiveCwd, agentDir),
     modelRegistry: ctx.modelRegistry,
     model,
@@ -643,9 +661,17 @@ export async function runAgent(
   const cleanupAbort = forwardAbortSignal(session, options.signal);
 
   // Build the effective prompt: optionally prepend parent context
+  // When using a session-based fork (forkedSessionManager), the parent's
+  // conversation is already in the sub-agent's session — no text prepend needed.
   let effectivePrompt = prompt;
-  if (options.inheritContext) {
+  if (options.inheritContext === "summary") {
     const parentContext = buildParentContext(ctx);
+    if (parentContext) {
+      effectivePrompt = parentContext + prompt;
+    }
+  } else if (options.inheritContext === "fork" && !forkedSessionManager) {
+    // Fallback: in-memory or empty parent session — use text-based fork
+    const parentContext = buildFullContext(ctx);
     if (parentContext) {
       effectivePrompt = parentContext + prompt;
     }

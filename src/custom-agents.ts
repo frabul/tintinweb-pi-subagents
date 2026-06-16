@@ -67,7 +67,7 @@ function loadFromDir(dir: string, agents: Map<string, AgentConfig>, source: "pro
       maxTurns: nonNegativeInt(fm.max_turns),
       systemPrompt: body.trim(),
       promptMode: fm.prompt_mode === "append" ? "append" : "replace",
-      inheritContext: fm.inherit_context != null ? fm.inherit_context === true : undefined,
+      inheritContext: parseInheritContext(fm.inherit_context),
       runInBackground: fm.run_in_background != null ? fm.run_in_background === true : undefined,
       isolated: fm.isolated != null ? fm.isolated === true : undefined,
       memory: parseMemory(fm.memory),
@@ -156,4 +156,12 @@ function inheritField(val: unknown): true | string[] | false {
   if (val === false || val === "none") return false;
   const items = csvList(val, []);
   return items.length > 0 ? items : false;
+}
+
+/** Parse inherit_context frontmatter: true/"summary" → "summary", "fork" → "fork", false/omitted → undefined. */
+function parseInheritContext(val: unknown): false | "summary" | "fork" | undefined {
+  if (val === true || val === "summary") return "summary";
+  if (val === "fork") return "fork";
+  if (val === false) return false;
+  return undefined;
 }

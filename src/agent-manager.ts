@@ -35,7 +35,7 @@ interface SpawnOptions {
   model?: Model<any>;
   maxTurns?: number;
   isolated?: boolean;
-  inheritContext?: boolean;
+  inheritContext?: false | "summary" | "fork";
   thinkingLevel?: ThinkingLevel;
   isBackground?: boolean;
   /**

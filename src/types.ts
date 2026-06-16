@@ -43,8 +43,8 @@ export interface AgentConfig {
   maxTurns?: number;
   systemPrompt: string;
   promptMode: "replace" | "append";
-  /** Default for spawn: fork parent conversation. undefined = caller decides. */
-  inheritContext?: boolean;
+  /** Default for spawn: inherit parent context. false = none, "summary" = text dump, "fork" = full fork including tool results. undefined = caller decides. */
+  inheritContext?: false | "summary" | "fork";
   /** Default for spawn: run in background. undefined = caller decides. */
   runInBackground?: boolean;
   /** Default for spawn: no extension tools. undefined = caller decides. */
@@ -110,7 +110,7 @@ export interface AgentInvocation {
   thinking?: ThinkingLevel;
   maxTurns?: number;
   isolated?: boolean;
-  inheritContext?: boolean;
+  inheritContext?: false | "summary" | "fork";
   runInBackground?: boolean;
   isolation?: IsolationMode;
 }

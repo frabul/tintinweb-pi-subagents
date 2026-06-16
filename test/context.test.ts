@@ -9,7 +9,7 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { buildParentContext, extractText } from "../src/context.js";
+import { buildFullContext, buildParentContext, extractText } from "../src/context.js";
 
 function makeCtx(entries: unknown[]): ExtensionContext {
   return { sessionManager: { getBranch: () => entries } } as unknown as ExtensionContext;
@@ -125,5 +125,84 @@ describe("buildParentContext", () => {
     );
     expect(out).toContain("[User]: question");
     expect(out).not.toContain("[Assistant]:");
+  });
+});
+
+describe("buildFullContext", () => {
+  it("returns empty string for an empty branch", () => {
+    expect(buildFullContext(makeCtx([]))).toBe("");
+  });
+
+  it("wraps a user+assistant exchange with the forked-context header and task footer", () => {
+    const out = buildFullContext(
+      makeCtx([userMsg("hello"), assistantMsg([{ type: "text", text: "hi back" }])]),
+    );
+    expect(out).toContain("# Parent Conversation (Forked)");
+    expect(out).toContain("[User]: hello");
+    expect(out).toContain("[Assistant]: hi back");
+    expect(out).toMatch(/# Your Task \(below\)\n$/);
+  });
+
+  it("includes tool results (unlike buildParentContext)", () => {
+    const out = buildFullContext(
+      makeCtx([
+        userMsg("list files"),
+        { type: "message", message: { role: "tool_result", content: "file1.txt\nfile2.txt", toolName: "bash" } },
+        assistantMsg([{ type: "text", text: "here are the files" }]),
+      ]),
+    );
+    expect(out).toContain("[User]: list files");
+    expect(out).toContain("[Tool Result (bash)]");
+    expect(out).toContain("file1.txt");
+    expect(out).toContain("[Assistant]: here are the files");
+  });
+
+  it("truncates long tool results to 1000 chars", () => {
+    const longOutput = "x".repeat(2000);
+    const out = buildFullContext(
+      makeCtx([
+        userMsg("run"),
+        { type: "message", message: { role: "tool_result", content: longOutput, toolName: "read" } },
+      ]),
+    );
+    expect(out).toContain("x".repeat(1000));
+    expect(out).toContain("...");
+    expect(out).not.toContain("x".repeat(1001));
+  });
+
+  it("includes tool calls from assistant messages", () => {
+    const out = buildFullContext(
+      makeCtx([
+        userMsg("find the function"),
+        assistantMsg([
+          { type: "toolCall", name: "grep", arguments: { pattern: "func" } },
+          { type: "text", text: "searching..." },
+        ]),
+      ]),
+    );
+    expect(out).toContain("[User]: find the function");
+    expect(out).toContain("[Tool Calls]");
+    expect(out).toContain("grep");
+    expect(out).toContain("[Assistant]: searching...");
+  });
+
+  it("skips whitespace-only messages", () => {
+    const out = buildFullContext(
+      makeCtx([assistantMsg([{ type: "text", text: "   " }])]),
+    );
+    expect(out).toBe("");
+  });
+
+  it("includes compaction summaries inline", () => {
+    const out = buildFullContext(
+      makeCtx([
+        userMsg("q1"),
+        { type: "compaction", summary: "compacted discussion" },
+        assistantMsg([{ type: "text", text: "a2" }]),
+      ]),
+    );
+    expect(out).toContain("[Summary]: compacted discussion");
+    expect(out).toContain("[User]: q1");
+    expect(out).toContain("[Assistant]: a2");
   });
 });
