@@ -408,10 +408,12 @@ export class AgentManager {
 
   private cleanup() {
     const cutoff = Date.now() - 10 * 60_000;
-    for (const [id, record] of this.agents) {
+    for (const [, record] of this.agents) {
       if (record.status === "running" || record.status === "queued") continue;
       if ((record.completedAt ?? 0) >= cutoff) continue;
-      this.removeRecord(id, record);
+      // Dispose session to free memory, but keep the record so stats survive.
+      record.session?.dispose?.();
+      record.session = undefined;
     }
   }
 
