@@ -681,7 +681,7 @@ export default function (pi: ExtensionAPI) {
   // the same load-bearing facts as the full version at ~75% fewer tokens, for
   // small/local models. Per-option details live in the param descriptions.
   const compactAgentToolDescription = `Launch an autonomous sub-agent for complex, multi-step tasks.
-Use tool \`agent_info('guidelines')\` for detailed information when needed.`;
+Before using this tool you MUST call \`agent_info('guidelines')\` for detailed information.`;
 
   const fullAgentToolDescription = `# Agents
 
@@ -696,7 +696,7 @@ If the user ask to create a custom agent, obtain instructions using "agents_info
 - Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
 - When you launch multiple agents for independent work, send them in a single message with multiple tool uses, with run_in_background: true on each, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls. Foreground calls run sequentially — only one executes at a time.
 - When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
-- When an agent runs in the background, you will be notified on completion — do not poll or sleep waiting for it. Continue with other work instead.
+- When an agent runs in the background, you will be notified on completion — **DO NOT POLL OR SLEEP WAITING FOR IT**. Continue with other work or wait for user prompt.
 - For broad codebase exploration or research, spawn Agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.
 - If you set run_in_background, you will be notified when it completes — do NOT poll or sleep waiting for it.
 - Use resume to continue the conversation with an agent that completed its task.
