@@ -16,32 +16,31 @@ export function extractText(content: unknown[]): string {
  * Build a text summary of the parent conversation context.
  * Used when inherit_context is "summary" to give the subagent visibility
  * into what has been discussed so far — tool results are skipped for brevity.
+ *
+ * Uses buildSessionContext() to get the fully resolved messages (compaction
+ * summaries, branch summaries resolved) rather than manually iterating raw
+ * branch entries.
  */
 export function buildParentContext(ctx: ExtensionContext): string {
-  const entries = ctx.sessionManager.getBranch();
-  if (!entries || entries.length === 0) return "";
+  // buildSessionContext is on SessionManager, but ExtensionContext exposes it
+  // as ReadonlySessionManager. At runtime it IS a SessionManager, so cast.
+  const sm = ctx.sessionManager as any;
+  const { messages } = sm.buildSessionContext?.() ?? { messages: undefined };
+  if (!messages || messages.length === 0) return "";
 
   const parts: string[] = [];
 
-  for (const entry of entries) {
-    if (entry.type === "message") {
-      const msg = entry.message;
-      if (msg.role === "user") {
-        const text = typeof msg.content === "string"
-          ? msg.content
-          : extractText(msg.content);
-        if (text.trim()) parts.push(`[User]: ${text.trim()}`);
-      } else if (msg.role === "assistant") {
-        const text = extractText(msg.content);
-        if (text.trim()) parts.push(`[Assistant]: ${text.trim()}`);
-      }
-      // Skip toolResult messages — too verbose for context
-    } else if (entry.type === "compaction") {
-      // Include compaction summaries — they're already condensed
-      if (entry.summary) {
-        parts.push(`[Summary]: ${entry.summary}`);
-      }
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      const text = typeof msg.content === "string"
+        ? msg.content
+        : extractText(msg.content);
+      if (text.trim()) parts.push(`[User]: ${text.trim()}`);
+    } else if (msg.role === "assistant") {
+      const text = extractText(msg.content);
+      if (text.trim()) parts.push(`[Assistant]: ${text.trim()}`);
     }
+    // Skip tool_result messages — too verbose for context summary
   }
 
   if (parts.length === 0) return "";
