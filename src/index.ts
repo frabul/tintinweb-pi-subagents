@@ -1359,11 +1359,6 @@ Do directly:
       agent_id: Type.String({
         description: "The agent ID to check.",
       }),
-      wait: Type.Optional(
-        Type.Boolean({
-          description: "If true, wait for the agent to complete before returning. Default: false.",
-        }),
-      ),
       verbose: Type.Optional(
         Type.Boolean({
           description: "If true, include the agent's full conversation (messages + tool calls). Default: false.",
@@ -1374,16 +1369,6 @@ Do directly:
       const record = manager.getRecord(params.agent_id);
       if (!record) {
         return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
-      }
-
-      // Wait for completion if requested.
-      // Pre-mark resultConsumed BEFORE awaiting: onComplete fires inside .then()
-      // (attached earlier at spawn time) and always runs before this await resumes.
-      // Setting the flag here prevents a redundant follow-up notification.
-      if (params.wait && record.status === "running" && record.promise) {
-        record.resultConsumed = true;
-        cancelNudge(params.agent_id);
-        await record.promise;
       }
 
       const displayName = getDisplayName(record.type);
