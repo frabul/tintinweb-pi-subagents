@@ -681,7 +681,14 @@ export default function (pi: ExtensionAPI) {
   // the same load-bearing facts as the full version at ~75% fewer tokens, for
   // small/local models. Per-option details live in the param descriptions.
   const compactAgentToolDescription = `Launch an autonomous sub-agent for complex, multi-step tasks.
-Before using this tool you MUST call \`agent_info('guidelines')\` for detailed information.`;
+Before using this tool you MUST call \`agent_info('list')\` to get available agents.
+Notes:
+- description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
+- Parallel work: one message, multiple Agent calls, run_in_background: true on each. 
+- You are notified when background agents finish — **NEVER POLL OR SLEEP**.
+- The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
+- resume continues a previous agent by ID; steer_subagent messages a running one.
+- isolation: "worktree" runs the agent in an isolated git worktree; changes land on a branch.`;
 
   const fullAgentToolDescription = `# Agents
 
@@ -697,7 +704,7 @@ If the user ask to create a custom agent, obtain instructions using "agents_info
 - When you launch multiple agents for independent work, send them in a single message with multiple tool uses, with run_in_background: true on each, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls. Foreground calls run sequentially — only one executes at a time.
 - When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
 - When an agent runs in the background, you will be notified on completion — **DO NOT POLL OR SLEEP WAITING FOR IT**. Continue with other work or wait for user prompt.
-- For broad codebase exploration or research, spawn Agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.
+- For broad codebase exploration or research, spawn an agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.
 - If you set run_in_background, you will be notified when it completes — do NOT poll or sleep waiting for it.
 - Use resume to continue the conversation with an agent that completed its task.
 - Use steer_subagent to send mid-run messages to a running background agent.
@@ -710,7 +717,6 @@ If the user ask to create a custom agent, obtain instructions using "agents_info
 - Give enough context about the surrounding problem so that the agent can make judgment calls rather than just guessing.
 - Describe what you've already learned or ruled out, so that the agent doesn't need to repeat the same work.
 - Provide clear, detailed prompts so the agent can work autonomously.
-- Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
 - When you assign an implementation task, mention the known implementation details (strategy, modules to change, etc.) to avoid unnecessary research by the subagent.
 - Add constrains. Example: "Only change this file, don't add new dependencies, etc."
 - If all information is already in one or more files, provide the reference to the files instead.
