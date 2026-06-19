@@ -2,6 +2,9 @@
  * prompts.ts — System prompt builder for agents.
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, EnvInfo } from "./types.js";
 
 /** Extra sections to inject into the system prompt (memory, skills, etc.). */
@@ -12,6 +15,45 @@ export interface PromptExtras {
   skillBlocks?: { name: string; content: string }[];
 }
 
+/**
+ * Walk up from `startDir` looking for a file named `filename`.
+ * Returns the content at the first match or undefined if none found (hits filesystem root).
+ */
+function findUp(startDir: string, filename: string): string | undefined {
+  let dir = startDir;
+  while (true) {
+    const candidate = join(dir, filename);
+    if (existsSync(candidate)) return readFileSync(candidate, "utf-8");
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+/**
+ * Replace known placeholders in a prompt string with file contents.
+ *
+ * - \${REPO_AGENTS_MD} → contents of AGENTS.md found by walking up from cwd
+ * - \${USER_AGENTS_MD} → contents of <agentDir>/AGENTS.md
+ *
+ * Placeholders whose files do not exist resolve to empty string (silent).
+ */
+export function resolvePromptPlaceholders(prompt: string, cwd: string): string {
+  let result = prompt;
+
+  if (prompt.includes("${REPO_AGENTS_MD}")) {
+    const content = findUp(cwd, "AGENTS.md") ?? "";
+    result = result.replaceAll("${REPO_AGENTS_MD}", content);
+  }
+
+  if (prompt.includes("${USER_AGENTS_MD}")) {
+    const userPath = join(getAgentDir(), "AGENTS.md");
+    const content = existsSync(userPath) ? readFileSync(userPath, "utf-8") : "";
+    result = result.replaceAll("${USER_AGENTS_MD}", content);
+  }
+
+  return result;
+}
 /**
  * Build the system prompt for an agent from its config.
  *
@@ -80,7 +122,7 @@ You are operating as a sub-agent invoked to handle a specific task.
     // placed verbatim (no wrapper tag) so it forms an identical byte prefix
     // with the parent session, maximising KV cache hits. The <active_agent>
     // tag and env block vary per call and are placed after the cached prefix.
-    return identity + "\n\n" + bridge + "\n\n" + activeAgentTag + envBlock + customSection + extrasSuffix;
+    return resolvePromptPlaceholders(identity + "\n\n" + bridge + "\n\n" + activeAgentTag + envBlock + customSection + extrasSuffix, cwd);
   }
 
   // "replace" mode — env header + the config's full system prompt
@@ -88,8 +130,7 @@ You are operating as a sub-agent invoked to handle a specific task.
 You have been invoked to handle a specific task autonomously.
 
 ${envBlock}`;
-
-  return activeAgentTag + replaceHeader + "\n\n" + config.systemPrompt + extrasSuffix;
+  return resolvePromptPlaceholders(activeAgentTag + replaceHeader + "\n\n" + config.systemPrompt + extrasSuffix, cwd);
 }
 
 /** Fallback base prompt when parent system prompt is unavailable in append mode. */

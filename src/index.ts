@@ -1529,7 +1529,8 @@ Do directly:
             "- **isolated** — true for no MCP/extension tools\n" +
             "- **memory** — \"user\", \"project\", or \"local\" for persistent memory\n" +
             "- **isolation** — \"worktree\" to run in isolated git worktree\n" +
-            "- **enabled** — false to disable the agent\n\n"
+            "- **enabled** — false to disable the agent\n\n" +
+            "- The prompt body supports **placeholders**: ${REPO_AGENTS_MD} (repo AGENTS.md, walked up from cwd) and ${USER_AGENTS_MD} (~/.pi/agent/AGENTS.md)"
           );
         }
         case "list": {
@@ -2036,6 +2037,10 @@ run_in_background: <true to run in background by default. Default: false>
 isolated: <true for no extension/MCP tools, only built-in tools. Default: false>
 memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit for none>
 isolation: <"worktree" to run in isolated git worktree. Omit for normal>
+
+# Placeholders (in the system prompt body):
+#   ${REPO_AGENTS_MD}  → content of AGENTS.md found by walking up from cwd
+#   ${USER_AGENTS_MD}  → content of <agentDir>/AGENTS.md (~/.pi/agent/AGENTS.md)
 ---
 
 <system prompt body — instructions for the agent>
@@ -2049,6 +2054,7 @@ Guidelines for choosing settings:
 - Set inherit_context to "summary" or "fork" if the agent needs to know what was discussed in the parent conversation
 - Set isolated: true if the agent should NOT have access to MCP servers or other extensions
 - Only include frontmatter fields that differ from defaults — omit fields where the default is fine
+- Use ${REPO_AGENTS_MD} and ${USER_AGENTS_MD} placeholders in the system prompt body to embed AGENTS.md content
 
 Write the file using the write tool. Only write the file, nothing else.`;
 

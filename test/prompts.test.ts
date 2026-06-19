@@ -1,6 +1,9 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { beforeEach, describe, expect, it } from "vitest";
 import { getAgentConfig, registerAgents } from "../src/agent-types.js";
-import { buildAgentPrompt } from "../src/prompts.js";
+import { buildAgentPrompt, resolvePromptPlaceholders } from "../src/prompts.js";
 import type { AgentConfig, EnvInfo } from "../src/types.js";
 
 const env: EnvInfo = {
@@ -386,6 +389,91 @@ describe("buildAgentPrompt", () => {
         const envIndex = prompt.indexOf("# Environment");
         expect(tagIndex).toBeLessThan(envIndex);
       }
+    });
+  });
+
+  describe("placeholders", () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), "prompts-test-"));
+    });
+
+    it("${REPO_AGENTS_MD} resolves to AGENTS.md content found by walking up", () => {
+      const agentsMd = "# Repo Guidelines\n\nBe concise.";
+      writeFileSync(join(tmpDir, "AGENTS.md"), agentsMd);
+
+      const result = resolvePromptPlaceholders("Prefix ${REPO_AGENTS_MD} Suffix", tmpDir);
+      expect(result).toBe("Prefix " + agentsMd + " Suffix");
+    });
+
+    it("${REPO_AGENTS_MD} resolves to empty string when no AGENTS.md exists", () => {
+      const result = resolvePromptPlaceholders("${REPO_AGENTS_MD}", tmpDir);
+      expect(result).toBe("");
+    });
+
+    it("${REPO_AGENTS_MD} walks up parent directories", () => {
+      const agentsMd = "Root level rules.";
+      writeFileSync(join(tmpDir, "AGENTS.md"), agentsMd);
+      const subDir = join(tmpDir, "sub", "deep");
+      mkdirSync(subDir, { recursive: true });
+      const result = resolvePromptPlaceholders("${REPO_AGENTS_MD}", subDir);
+      expect(result).toBe(agentsMd);
+    });
+
+    it("multiple occurrences of ${REPO_AGENTS_MD} are all replaced", () => {
+      const agentsMd = "content";
+      writeFileSync(join(tmpDir, "AGENTS.md"), agentsMd);
+
+      const result = resolvePromptPlaceholders("A ${REPO_AGENTS_MD} B ${REPO_AGENTS_MD} C", tmpDir);
+      expect(result).toBe("A content B content C");
+    });
+
+    it("${REPO_AGENTS_MD} works in replace mode buildAgentPrompt", () => {
+      writeFileSync(join(tmpDir, "AGENTS.md"), "# Project AGENTS.md");
+      const config: AgentConfig = {
+        name: "test",
+        description: "Test",
+        builtinToolNames: [],
+        extensions: true,
+        skills: true,
+        systemPrompt: "Custom prompt.\n${REPO_AGENTS_MD}\nFooter.",
+        promptMode: "replace",
+        inheritContext: false,
+        runInBackground: false,
+        isolated: false,
+      };
+      const prompt = buildAgentPrompt(config, tmpDir, env);
+      expect(prompt).toContain("Custom prompt.");
+      expect(prompt).toContain("Project AGENTS.md");
+      expect(prompt).toContain("Footer.");
+      expect(prompt).not.toContain("${REPO_AGENTS_MD}");
+    });
+
+    it("${REPO_AGENTS_MD} works in append mode buildAgentPrompt", () => {
+      writeFileSync(join(tmpDir, "AGENTS.md"), "# Project AGENTS.md");
+      const config: AgentConfig = {
+        name: "test",
+        description: "Test",
+        builtinToolNames: [],
+        extensions: true,
+        skills: true,
+        systemPrompt: "Custom instructions.\n${REPO_AGENTS_MD}",
+        promptMode: "append",
+        inheritContext: false,
+        runInBackground: false,
+        isolated: false,
+      };
+      const prompt = buildAgentPrompt(config, tmpDir, env, "Parent prompt.");
+      expect(prompt).toContain("Custom instructions.");
+      expect(prompt).toContain("Project AGENTS.md");
+      expect(prompt).not.toContain("${REPO_AGENTS_MD}");
+    });
+
+    it("no placeholders means no changes", () => {
+      const input = "Just a normal prompt without placeholders.";
+      const result = resolvePromptPlaceholders(input, tmpDir);
+      expect(result).toBe(input);
     });
   });
 });

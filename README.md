@@ -204,13 +204,39 @@ All fields are optional — sensible defaults for everything.
 | `model` | inherit parent | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`) |
 | `thinking` | inherit | off, minimal, low, medium, high, xhigh |
 | `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
-| `prompt_mode` | `replace` | `replace`: body is the full system prompt (no AGENTS.md / CLAUDE.md inheritance). `append`: body appended to parent's prompt (agent acts as a "parent twin" — inherits parent's AGENTS.md / CLAUDE.md) |
+| `prompt_mode` | `replace` | `replace`: body is the full system prompt. `append`: body appended to parent's prompt (agent acts as a "parent twin" — inherits parent's AGENTS.md / CLAUDE.md) |
+| — | — | The prompt body supports **placeholders**: `${REPO_AGENTS_MD}` (repo AGENTS.md, walked up from cwd) and `${USER_AGENTS_MD}` (~/.pi/agent/AGENTS.md). See [Placeholders](#placeholders) below |
 | `inherit_context` | `false` | Controls parent context inheritance: `false` (no context), `"summary"` (text summary of parent conversation, skips tool results), or `"fork"` (full fork including tool calls and results) |
 | `run_in_background` | `false` | Run in background by default |
 | `isolated` | `false` | Hermetic specialist mode: forces `extensions: false` + `skills: false` + drops `ext:` selectors. Only built-in tools. Distinct from `isolation: worktree` (filesystem) |
 | `enabled` | `true` | Set to `false` to disable an agent (useful for hiding a default agent per-project) |
 
 Frontmatter is authoritative. If an agent file sets `model`, `thinking`, `max_turns`, `inherit_context`, `run_in_background`, `isolated`, or `isolation`, those values are locked for that agent. `Agent` tool parameters only fill fields the agent config leaves unspecified.
+
+### Placeholders
+
+The system prompt body supports two placeholders that are replaced with file contents at build time:
+
+| Placeholder | Source | Resolution |
+|---|---|---|
+| `${REPO_AGENTS_MD}` | Project `AGENTS.md` | Walked up from subagent `cwd` (same discovery as pi's own AGENTS.md) |
+| `${USER_AGENTS_MD}` | Global `AGENTS.md` | Read from `<agentDir>/AGENTS.md` (~/.pi/agent/AGENTS.md) |
+
+If the file doesn't exist, the placeholder resolves to empty string (silently). Works in both `replace` and `append` modes.
+
+```markdown
+---
+prompt_mode: replace
+---
+
+# Instructions
+
+${REPO_AGENTS_MD}
+
+${USER_AGENTS_MD}
+
+Follow the guidelines above.
+```
 
 ### Tool & extension scoping
 
