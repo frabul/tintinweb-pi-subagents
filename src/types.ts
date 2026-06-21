@@ -107,6 +107,8 @@ export interface AgentRecord {
 export interface AgentInvocation {
   /** Short display name, e.g. "haiku" — only set when different from parent. */
   modelName?: string;
+  /** Fully-resolved `provider/modelId` actually used by the spawned session, regardless of whether it matches the parent. */
+  resolvedModel?: string;
   thinking?: ThinkingLevel;
   maxTurns?: number;
   isolated?: boolean;

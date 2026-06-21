@@ -173,7 +173,7 @@ export function getPromptModeLabel(type: SubagentType): string | undefined {
 /** Mode label is not included — callers add it where they want it. */
 export function buildInvocationTags(
   invocation: AgentInvocation | undefined,
-): { modelName?: string; tags: string[] } {
+): { modelName?: string; resolvedModel?: string; tags: string[] } {
   const tags: string[] = [];
   if (!invocation) return { tags };
   if (invocation.thinking) tags.push(`thinking: ${invocation.thinking}`);
@@ -183,7 +183,7 @@ export function buildInvocationTags(
   else if (invocation.inheritContext === "fork") tags.push("context: fork");
   if (invocation.runInBackground) tags.push("background");
   if (invocation.maxTurns != null) tags.push(`max turns: ${invocation.maxTurns}`);
-  return { modelName: invocation.modelName, tags };
+  return { modelName: invocation.modelName, resolvedModel: invocation.resolvedModel, tags };
 }
 
 /** Truncate text to a single line, max `len` chars. */
@@ -191,6 +191,15 @@ function truncateLine(text: string, len = 60): string {
   const line = text.split("\n").find(l => l.trim())?.trim() ?? "";
   if (line.length <= len) return line;
   return line.slice(0, len) + "…";
+}
+
+/** Get a short model label for widget display from an AgentInvocation. */
+export function getModelDisplay(invocation?: AgentInvocation): string | undefined {
+  if (!invocation) return undefined;
+  const raw = invocation.modelName ?? invocation.resolvedModel;
+  if (!raw) return undefined;
+  const short = raw.includes("/") ? raw.split("/").pop()! : raw;
+  return short;
 }
 
 /** Build a human-readable activity string from currently-running tools or response text. */
@@ -291,7 +300,7 @@ export class AgentWidget {
   }
 
   /** Render a finished agent line. */
-  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string }, theme: Theme): string {
+  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; invocation?: AgentInvocation }, theme: Theme): string {
     const name = getDisplayName(a.type);
     const modeLabel = getPromptModeLabel(a.type);
     const duration = formatMs((a.completedAt ?? Date.now()) - a.startedAt);
@@ -324,7 +333,9 @@ export class AgentWidget {
     parts.push(duration);
 
     const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
-    return `${icon} ${theme.fg("dim", name)}${modeTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
+    const modelLabel = getModelDisplay(a.invocation);
+    const modelTag = modelLabel ? ` ${theme.fg("dim", `[${modelLabel}]`)}` : "";
+    return `${icon} ${theme.fg("dim", name)}${modeTag}${modelTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
   }
 
   /**
@@ -365,6 +376,8 @@ export class AgentWidget {
       const name = getDisplayName(a.type);
       const modeLabel = getPromptModeLabel(a.type);
       const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
+      const modelLabel = getModelDisplay(a.invocation);
+      const modelTag = modelLabel ? ` ${theme.fg("dim", `[${modelLabel}]`)}` : "";
       const elapsed = formatMs(Date.now() - a.startedAt);
 
       const bg = this.agentActivity.get(a.id);
@@ -387,7 +400,7 @@ export class AgentWidget {
       const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
 
       runningLines.push([
-        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${theme.bold(name)}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", statsText)}`),
+        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${theme.bold(name)}${modeTag}${modelTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", statsText)}`),
         truncate(theme.fg("dim", "│  ") + theme.fg("dim", `  ⎿  ${activity}`)),
       ]);
     }

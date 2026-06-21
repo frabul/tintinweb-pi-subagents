@@ -42,6 +42,7 @@ import {
   formatTokens,
   formatTurns,
   getDisplayName,
+  getModelDisplay,
   getPromptModeLabel,
   SPINNER,
   type UICtx,
@@ -1087,6 +1088,7 @@ Do directly:
       const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
       const agentInvocation: AgentInvocation = {
         modelName,
+        resolvedModel,
         thinking,
         // Explicit value only — the default fallback would just add noise.
         // Normalize so `0` (unlimited) doesn't surface as a misleading "max turns: 0".
@@ -1763,11 +1765,12 @@ Do directly:
       ctx.ui.notify("No agents.", "info");
       return;
     }
-
     const options = agents.map(a => {
       const dn = getDisplayName(a.type);
       const dur = formatDuration(a.startedAt, a.completedAt);
-      return `${dn} (${a.description}) · ${a.toolUses} tools · ${a.status} · ${dur}`;
+      const modelLabel = getModelDisplay(a.invocation);
+      const modelStr = modelLabel ? ` [${modelLabel}]` : "";
+      return `${dn}${modelStr} (${a.description}) · ${a.toolUses} tools · ${a.status} · ${dur}`;
     });
 
     const choice = await ctx.ui.select("Running agents", options);
