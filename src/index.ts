@@ -1361,7 +1361,7 @@ Do directly:
     name: SUBAGENT_TOOL_NAMES.GET_RESULT,
     label: "Get Agent Result",
     description:
-      "Check status and retrieve results from a background agent. Use the agent ID returned by Agent with run_in_background.",
+      "Check status and retrieve results from a background agent. Use the agent ID returned by Agent with run_in_background. Do not use this to poll for results — you will be notified when the agent completes.",
     promptSnippet: "Check status and retrieve results from a background agent",
     parameters: Type.Object({
       agent_id: Type.String({
@@ -1395,7 +1395,7 @@ Do directly:
         `Description: ${record.description}\n\n`;
 
       if (record.status === "running") {
-        output += "Agent is still running. Use wait: true or check back later.";
+        output += "Agent is still running. Do not use this to poll for results — you will be notified when the agent completes.";
       } else if (record.status === "error") {
         output += `Error: ${record.error}`;
       } else {
