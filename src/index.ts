@@ -665,7 +665,7 @@ export default function (pi: ExtensionAPI) {
     schedule: Type.Optional(
       Type.String({
         description:
-          'Opt-in only — fire later instead of now. Omit to run immediately (the default, almost always correct). ' +
+          'Opt-in only — fire later instead of now. Omit or blank to run immediately (the default, almost always correct). ' +
           'Formats: 6-field cron ("0 0 9 * * 1" = 9am Mon), interval ("5m"/"1h"), one-shot ("+10m" or ISO). ' +
           'Forces run_in_background; incompatible with inherit_context and resume. Returns job ID.',
       }),
@@ -685,6 +685,7 @@ export default function (pi: ExtensionAPI) {
 Before using this tool you MUST call \`agent_info('list')\` to get available agents.
 Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
+- Optional parameters override the selected agent type's defaults. Omit or blank them when no override is intended.
 - Parallel work: one message, multiple Agent calls, run_in_background: true on each. 
 - You are notified when background agents finish — **NEVER POLL OR SLEEP**.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
@@ -701,6 +702,7 @@ If the user ask to create a custom agent, obtain instructions using "agents_info
 ## Guidelines
 
 - Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
+- Optional parameters override the selected agent type's defaults. Omit or blank them when no override is intended.
 - When you launch multiple agents for independent work, send them in a single message with multiple tool uses, with run_in_background: true on each, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls. Foreground calls run sequentially — only one executes at a time.
 - When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
 - When an agent runs in the background, you will be notified on completion — **DO NOT POLL OR SLEEP WAITING FOR IT**. Continue with other work or wait for user prompt.
@@ -800,33 +802,33 @@ Do directly:
       model: Type.Optional(
         Type.String({
           description:
-            'Optional model override. Accepts "provider/modelId" or fuzzy name (e.g. "haiku", "sonnet"). Omit to use the agent type\'s default.',
+            'Optional model override. Accepts "provider/modelId" or fuzzy name (e.g. "haiku", "sonnet"). Omit or blank to use the agent type\'s default.',
         }),
       ),
       thinking: Type.Optional(
         Type.String({
-          description: "Thinking level: off, minimal, low, medium, high, xhigh. Overrides agent default.",
+          description: "Optional thinking override: off, minimal, low, medium, high, xhigh. Omit or blank to use the agent type's default.",
         }),
       ),
       max_turns: Type.Optional(
         Type.Number({
-          description: "Maximum number of agentic turns before stopping. Omit for unlimited (default).",
+          description: "Optional maximum-turn override. Omit or blank to use the agent type's default (unlimited when unset).",
           minimum: 1,
         }),
       ),
       run_in_background: Type.Optional(
         Type.Boolean({
-          description: "Set to true to run in background. Returns agent ID immediately. You will be notified on completion.",
+          description: "Optional background-execution override. Omit or blank to use the agent type's default.",
         }),
       ),
       resume: Type.Optional(
         Type.String({
-          description: "Optional agent ID to resume from. Continues from previous context.",
+          description: "Optional agent ID to resume. Omit or blank to start a new agent.",
         }),
       ),
       isolated: Type.Optional(
         Type.Boolean({
-          description: "If true, agent gets no extension/MCP tools — only built-in tools.",
+          description: "Optional isolation override. If true, agent gets no extension/MCP tools — only built-in tools. Omit or blank to use the agent type's default.",
         }),
       ),
       inherit_context: Type.Optional(
@@ -837,9 +839,14 @@ Do directly:
           Type.Literal("fork", {
             description: "Fork the full parent conversation into the agent, including tool calls and results.",
           }),
-        ])),
+          Type.Literal("", {
+            description: "Use agent type's configuration default.",
+          }),
+        ], {
+          description: "Optional context-inheritance override. Omit or blank to use the agent type's default.",
+        })),
       ...scheduleParam,
-    }),
+    }, { strict: false }),
 
     // ---- Custom rendering: Claude Code style ----
 
@@ -2017,19 +2024,19 @@ The file format is a markdown file with YAML frontmatter and a system prompt bod
 \`\`\`markdown
 ---
 description: <one-line description shown in UI>
-tools: <comma-separated built-in tools: read, bash, edit, write, grep, find, ls. Use "none" for no tools. Omit for all tools>
-model: <optional model as "provider/modelId", e.g. "anthropic/claude-haiku-4-5-20251001". Omit to inherit parent model>
-thinking: <optional thinking level: off, minimal, low, medium, high, xhigh. Omit to inherit>
-max_turns: <optional max agentic turns. 0 or omit for unlimited (default)>
+tools: <comma-separated built-in tools: read, bash, edit, write, grep, find, ls. Use "none" for no tools. Omit or blank for all tools>
+model: <optional model as "provider/modelId", e.g. "anthropic/claude-haiku-4-5-20251001". Omit or blank to inherit parent model>
+thinking: <optional thinking level: off, minimal, low, medium, high, xhigh. Omit or blank to inherit>
+max_turns: <optional max agentic turns. 0 or Omit or blank for unlimited (default)>
 prompt_mode: <"replace" (body IS the full system prompt) or "append" (body is appended to default prompt). Default: replace>
 extensions: <true (inherit all MCP/extension tools), false (none), or comma-separated names. Default: true>
 skills: <true (inherit all), false (none), or comma-separated skill names to preload into prompt. Default: true>
-disallowed_tools: <comma-separated tool names to block, even if otherwise available. Omit for none>
+disallowed_tools: <comma-separated tool names to block, even if otherwise available. Omit or blank for none>
 inherit_context: <false (no context), "summary" (text summary, skips tool results), or "fork" (full conversation including tool call/results). Default: false>
 run_in_background: <true to run in background by default. Default: false>
 isolated: <true for no extension/MCP tools, only built-in tools. Default: false>
-memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit for none>
-isolation: <"worktree" to run in isolated git worktree. Omit for normal>
+memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit or blank for none>
+isolation: <"worktree" to run in isolated git worktree. Omit or blank for normal>
 
 # Placeholders (in the system prompt body):
 #   ${REPO_AGENTS_MD}  → content of AGENTS.md found by walking up from cwd
@@ -2046,7 +2053,7 @@ Guidelines for choosing settings:
 - Use prompt_mode: replace for fully custom agents with their own personality/instructions
 - Set inherit_context to "summary" or "fork" if the agent needs to know what was discussed in the parent conversation
 - Set isolated: true if the agent should NOT have access to MCP servers or other extensions
-- Only include frontmatter fields that differ from defaults — omit fields where the default is fine
+- Only include frontmatter fields that differ from defaults — Omit or blank fields where the default is fine
 - Use ${REPO_AGENTS_MD} and ${USER_AGENTS_MD} placeholders in the system prompt body to embed AGENTS.md content
 
 Write the file using the write tool. Only write the file, nothing else.`;

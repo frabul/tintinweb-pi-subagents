@@ -292,6 +292,8 @@ Launch a sub-agent.
 | `isolated` | boolean | no | No extension/MCP tools |
 | `inherit_context` | `false`, `"summary"`, `"fork"` | no | Parent context inheritance mode — `false` (no context), `"summary"` (text summary without tool results), or `"fork"` (full fork including tool calls and results) |
 
+Optional parameters override the selected agent type's defaults. Omit them when no override is intended.
+
 ### `get_subagent_result`
 
 Check status and retrieve results from a background agent.

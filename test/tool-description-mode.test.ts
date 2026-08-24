@@ -120,6 +120,7 @@ describe("toolDescriptionMode", () => {
     for (const contract of [
       "run_in_background",
       "resume",
+      "Optional parameters override",
       "steer_subagent",
       ".pi/agents/",
       "self-contained",
@@ -128,9 +129,11 @@ describe("toolDescriptionMode", () => {
     }
   });
 
-  it("does not expose worktree isolation as an Agent tool parameter", () => {
+  it("uses non-strict schema so optional Agent parameters can be omitted", () => {
     const tools = setup();
-    expect(tools.get("Agent").parameters.properties).not.toHaveProperty("isolation");
+    const schema = tools.get("Agent").parameters;
+    expect(schema.strict).toBe(false);
+    expect(schema.properties).not.toHaveProperty("isolation");
   });
 
   it("custom mode renders the project template with placeholders substituted", () => {
