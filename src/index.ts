@@ -1006,39 +1006,36 @@ Do directly:
 
       const resolvedConfig = resolveAgentInvocationConfig(customConfig, params);
 
-      // Resolve model: caller-supplied `params.model` wins (it's an override),
-      // frontmatter `agentConfig.model` is the default. Fail loud when the
-      // resolved string doesn't match a known model, fallback to current model
-      // only if model was provided by frontmatter
+      // Resolve model: caller-supplied `params.model` (an explicit override) wins
+      // over the agent's frontmatter `model:` default. When a model IS specified
+      // (by param or frontmatter) it must resolve to a known model - if it doesn't,
+      // fail loud. We never silently fall back to the parent/main-agent model, which
+      // would mask a misconfigured pin. Only when NO model is specified at all do we
+      // default to the parent model.
       let model = ctx.model;
       if (resolvedConfig.modelInput) {
-        let resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
-
+        const resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
         if (typeof resolved === "string") {
-          // error — build error details so renderResult shows red ✗
-          // Fail only if the model was provided
-          if (resolvedConfig.modelFromParams) {
-            let errMsg = typeof resolved === "string" ? resolved : String(resolved);
-            if (errMsg.length > 500)
-                errMsg = errMsg.slice(0, 500) + "\n... (truncated)";
-            if (errMsg.split("\n").length > 5) {
-                errMsg = (errMsg.split("\n").slice(0, 5).join("\n") + "\n... (truncated)");
-            }
-            const errDetails: AgentDetails = {
-                displayName: getDisplayName(subagentType),
-                description: params.description as string,
-                subagentType,
-                toolUses: 0,
-                tokens: "",
-                durationMs: 0,
-                status: "error",
-                error: "Unknown model requested " + resolvedConfig.modelInput,
-            };
-            return textResult(errMsg, errDetails);
+          // Model not found -> fail loud (covers both params overrides and frontmatter pins).
+          let errMsg = resolved;
+          if (errMsg.length > 500)
+              errMsg = errMsg.slice(0, 500) + "\n... (truncated)";
+          if (errMsg.split("\n").length > 5) {
+              errMsg = (errMsg.split("\n").slice(0, 5).join("\n") + "\n... (truncated)");
           }
-        } else {
-          model = resolved;
+          const errDetails: AgentDetails = {
+              displayName: getDisplayName(subagentType),
+              description: params.description as string,
+              subagentType,
+              toolUses: 0,
+              tokens: "",
+              durationMs: 0,
+              status: "error",
+              error: "Model not found: " + resolvedConfig.modelInput,
+          };
+          return textResult(errMsg, errDetails);
         }
+        model = resolved;
       }
 
       // Scope validation: the effective resolved model is checked against the
