@@ -97,6 +97,59 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.isolated).toBe(true);
   });
 
+  it("treats a blank model override as omitted and falls back to frontmatter", () => {
+    // The LLM frequently emits an empty-string model override. That must be
+    // ignored so the agent type's pinned model (worker.md `model:`) applies,
+    // rather than leaking the parent/main-agent model.
+    const resolved = resolveAgentInvocationConfig(
+      makeConfig({ model: "provider/config-model" }),
+      { model: "" },
+    );
+    expect(resolved.modelInput).toBe("provider/config-model");
+    expect(resolved.modelFromParams).toBe(false);
+  });
+
+  it("treats a whitespace-only model override as omitted", () => {
+    const resolved = resolveAgentInvocationConfig(
+      makeConfig({ model: "provider/config-model" }),
+      { model: "   " },
+    );
+    expect(resolved.modelInput).toBe("provider/config-model");
+    expect(resolved.modelFromParams).toBe(false);
+  });
+
+  it("treats a blank thinking override as omitted and falls back to frontmatter", () => {
+    const resolved = resolveAgentInvocationConfig(
+      makeConfig({ thinking: "high" }),
+      { thinking: "" },
+    );
+    expect(resolved.thinking).toBe("high");
+  });
+
+  it("treats a blank isolation override as omitted and falls back to frontmatter", () => {
+    const resolved = resolveAgentInvocationConfig(
+      makeConfig({ isolation: "worktree" }),
+      { isolation: "   " },
+    );
+    expect(resolved.isolation).toBe("worktree");
+  });
+
+  it("treats a blank inherit_context override as omitted and falls back to frontmatter", () => {
+    const resolved = resolveAgentInvocationConfig(
+      makeConfig({ inheritContext: "fork" }),
+      { inherit_context: "" },
+    );
+    expect(resolved.inheritContext).toBe("fork");
+  });
+
+  it("treats a blank inherit_context override as omitted (no config) and defaults to false", () => {
+    const resolved = resolveAgentInvocationConfig(
+      makeConfig({ inheritContext: undefined }),
+      { inherit_context: "   " },
+    );
+    expect(resolved.inheritContext).toBe(false);
+  });
+
   it("defaults booleans to false when neither config nor params set them", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({
