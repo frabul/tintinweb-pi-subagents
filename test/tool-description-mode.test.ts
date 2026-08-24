@@ -121,12 +121,16 @@ describe("toolDescriptionMode", () => {
       "run_in_background",
       "resume",
       "steer_subagent",
-      'isolation: "worktree"',
       ".pi/agents/",
       "self-contained",
     ]) {
       expect(desc).toContain(contract);
     }
+  });
+
+  it("does not expose worktree isolation as an Agent tool parameter", () => {
+    const tools = setup();
+    expect(tools.get("Agent").parameters.properties).not.toHaveProperty("isolation");
   });
 
   it("custom mode renders the project template with placeholders substituted", () => {

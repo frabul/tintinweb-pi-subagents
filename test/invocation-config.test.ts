@@ -41,7 +41,6 @@ describe("resolveAgentInvocationConfig", () => {
         inherit_context: true,
         run_in_background: true,
         isolated: true,
-        isolation: "worktree",
       },
     );
 
@@ -65,7 +64,6 @@ describe("resolveAgentInvocationConfig", () => {
       inherit_context: true,
       run_in_background: true,
       isolated: true,
-      isolation: "worktree",
     });
 
     expect(resolved.modelInput).toBe("provider/param-model");
@@ -75,7 +73,7 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.inheritContext).toBe("summary");
     expect(resolved.runInBackground).toBe(true);
     expect(resolved.isolated).toBe(true);
-    expect(resolved.isolation).toBe("worktree");
+    expect(resolved.isolation).toBeUndefined();
   });
 
   it("lets parent fill in booleans when config leaves them undefined", () => {
@@ -124,14 +122,6 @@ describe("resolveAgentInvocationConfig", () => {
       { thinking: "" },
     );
     expect(resolved.thinking).toBe("high");
-  });
-
-  it("treats a blank isolation override as omitted and falls back to frontmatter", () => {
-    const resolved = resolveAgentInvocationConfig(
-      makeConfig({ isolation: "worktree" }),
-      { isolation: "   " },
-    );
-    expect(resolved.isolation).toBe("worktree");
   });
 
   it("treats a blank inherit_context override as omitted and falls back to frontmatter", () => {

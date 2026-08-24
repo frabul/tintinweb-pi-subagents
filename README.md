@@ -211,7 +211,7 @@ All fields are optional — sensible defaults for everything.
 | `isolated` | `false` | Hermetic specialist mode: forces `extensions: false` + `skills: false` + drops `ext:` selectors. Only built-in tools. Distinct from `isolation: worktree` (filesystem) |
 | `enabled` | `true` | Set to `false` to disable an agent (useful for hiding a default agent per-project) |
 
-Frontmatter is authoritative. If an agent file sets `model`, `thinking`, `max_turns`, `inherit_context`, `run_in_background`, `isolated`, or `isolation`, those values are locked for that agent. `Agent` tool parameters only fill fields the agent config leaves unspecified.
+Worktree isolation is configured exclusively in agent frontmatter. For other execution settings, frontmatter is authoritative: if an agent file sets `model`, `thinking`, `max_turns`, `inherit_context`, `run_in_background`, or `isolated`, that value is locked for the agent. `Agent` tool parameters only fill fields the agent config leaves unspecified.
 
 ### Placeholders
 
@@ -290,7 +290,6 @@ Launch a sub-agent.
 | `run_in_background` | boolean | no | Run without blocking |
 | `resume` | string | no | Agent ID to resume a previous session |
 | `isolated` | boolean | no | No extension/MCP tools |
-| `isolation` | `"worktree"` | no | Run in an isolated git worktree |
 | `inherit_context` | `false`, `"summary"`, `"fork"` | no | Parent context inheritance mode — `false` (no context), `"summary"` (text summary without tool results), or `"fork"` (full fork including tool calls and results) |
 
 ### `get_subagent_result`
@@ -546,10 +545,12 @@ The `disallowed_tools` field is respected when determining write capability — 
 
 ## Worktree Isolation
 
-Set `isolation: worktree` to run an agent in a temporary git worktree:
+Set `isolation: worktree` in a custom agent's frontmatter to run that agent in a temporary git worktree:
 
-```
-Agent({ subagent_type: "refactor", prompt: "...", isolation: "worktree" })
+```yaml
+---
+isolation: worktree
+---
 ```
 
 The agent gets a full, isolated copy of the repository. On completion:
@@ -559,7 +560,7 @@ The agent gets a full, isolated copy of the repository. On completion:
 
 The automatic preservation commit uses `--no-verify`, so local pre-commit hooks can't block it — the commit is local-only and never pushed, and pre-push/server-side hooks still apply.
 
-If the worktree cannot be created (not a git repo, no commits, or `git worktree add` fails), the `Agent` tool returns a clear error instead of running unisolated — `isolation: "worktree"` is a strict guarantee, not a hint. Initialize git and commit at least once, or omit `isolation`.
+If the worktree cannot be created (not a git repo, no commits, or `git worktree add` fails), the `Agent` tool returns a clear error instead of running unisolated — `isolation: "worktree"` is a strict guarantee, not a hint. Initialize git and commit at least once, or remove `isolation` from the agent frontmatter.
 
 ## Skill Preloading
 

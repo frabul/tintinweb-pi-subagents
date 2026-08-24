@@ -7,7 +7,6 @@ interface AgentInvocationParams {
   run_in_background?: boolean;
   inherit_context?: boolean | "summary" | "fork";
   isolated?: boolean;
-  isolation?: IsolationMode;
 }
 
 export function resolveAgentInvocationConfig(
@@ -32,10 +31,9 @@ export function resolveAgentInvocationConfig(
   // undefined so it falls through to the config default.
   const rawModel = params.model?.trim() || undefined;
   const rawThinking = params.thinking?.trim() || undefined;
-  const rawIsolation = params.isolation?.trim() || undefined;
   const rawInheritContext =
     typeof params.inherit_context === "string"
-      ? (params.inherit_context.trim() || undefined)
+      ? normalizeInheritContextValue(params.inherit_context)
       : params.inherit_context;
   return {
     // Caller-supplied `params.model` wins over the agent's frontmatter
@@ -49,12 +47,18 @@ export function resolveAgentInvocationConfig(
     inheritContext: agentConfig?.inheritContext ?? normalizeAgentInheritContext(rawInheritContext) ?? false,
     runInBackground: agentConfig?.runInBackground ?? params.run_in_background ?? false,
     isolated: agentConfig?.isolated ?? params.isolated ?? false,
-    isolation: agentConfig?.isolation ?? rawIsolation,
+    isolation: agentConfig?.isolation,
   };
 }
 
 export function resolveJoinMode(defaultJoinMode: JoinMode, runInBackground: boolean): JoinMode | undefined {
   return runInBackground ? defaultJoinMode : undefined;
+}
+
+/** Collapse blank/invalid strings to undefined before normalizing inherit_context. */
+function normalizeInheritContextValue(value: string): "summary" | "fork" | undefined {
+  const normalized = value.trim();
+  return normalized === "summary" || normalized === "fork" ? normalized : undefined;
 }
 
 /** Normalize inherit_context from tool-call params: true → "summary". */
