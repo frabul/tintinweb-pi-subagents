@@ -506,9 +506,9 @@ export default function (pi: ExtensionAPI) {
     // governs what a human is shown, not what the event carries.
     //
     // `tokens` above is the other convention, kept as it shipped: a flat view
-    // model like pi's own `SessionStats`, carrying the DISPLAY total, which
-    // excludes cacheRead (#38). The two answer different questions and neither
-    // derives from the other.
+    // model like pi's own `SessionStats`, carrying the weighted DISPLAY total
+    // (cacheRead contributes at 0.2× rather than its full billed amount, #38).
+    // The two answer different questions and neither derives from the other.
     const usage = toReportedUsage(u);
     return {
       id: record.id,

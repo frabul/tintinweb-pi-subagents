@@ -3,32 +3,32 @@
 /**
  * Lifetime usage components, accumulated via `message_end` events. Survives
  * compaction (which replaces session.state.messages and would reset any
- * stats-derived sum). cacheRead is excluded because each turn's cacheRead is
- * the cumulative cached prefix re-read on that one call — summing across
- * turns counts the prefix N times. See issue #38.
+ * stats-derived sum).
  *
- * That exclusion is about this *display* total, not about what was billed: the
- * prefix really is re-read and re-charged on every call. So `cacheRead` is
- * accumulated here anyway, kept out of `getLifetimeTotal` and used only where
- * billing is the question — reporting to the parent session, whose own messages
- * pi counts the same way (`addUsageToTotals`). Reporting 0 there would make a
- * subagent's rows count differently from every other row in one total.
+ * The token DISPLAY total deliberately condenses all four token components into
+ * one weighted score: output is weighted at 3×, cacheRead at 0.2×, and input
+ * and cacheWrite at 1×. Upstream's `tokens.total` sums a cumulative cached
+ * prefix once per turn (issue #38), so giving `cacheRead` a reduced weight
+ * avoids letting repeated prefix reads dominate while still representing all
+ * four stats. `cacheRead` is optional for compatibility with older
+ * accumulators and absent reads as 0.
  *
- * `cost` is a plain sum for the same reason: it is what pi charged for that one
- * message (`usage.cost.total`, priced from the model's rates), not a cumulative
- * figure. Both are optional because a model with no pricing data reports no
- * cost, and because every accumulator predates them; absent reads as 0.
+ * Cost is accumulated separately as a plain sum: it is what pi charged for each
+ * message (`usage.cost.total`, priced from the model's rates), not a token
+ * component. It is optional because a model with no pricing data reports no
+ * cost, and because every accumulator predates it; absent reads as 0.
  */
-export type LifetimeUsage = { input: number; output: number; cacheWrite: number; cacheRead?: number; cost?: number };
+export type LifetimeUsage = {
+  input: number;
+  output: number;
+  cacheWrite: number;
+  cacheRead?: number;
+  cost?: number;
+};
 
-/**
- * Sum of lifetime *token* components for DISPLAY, or 0 if undefined.
- * Deliberately excludes `cacheRead` (see above) and `cost` — that is money, not
- * tokens, and lives on the same object only because it accumulates on the same
- * events.
- */
+/** Weighted lifetime token score for DISPLAY, or 0 if undefined. */
 export function getLifetimeTotal(u?: LifetimeUsage): number {
-  return u ? u.input + u.output + u.cacheWrite : 0;
+  return u ? Math.round(3 * u.output + u.input + 0.2 * (u.cacheRead ?? 0) + u.cacheWrite) : 0;
 }
 
 /** Accumulated cost in USD, or 0 when unpriced/undefined. */
@@ -73,10 +73,11 @@ export type ReportedUsage = {
  * callers attach nothing rather than a zero, so a consumer can tell "spent
  * nothing" from "never ran".
  *
- * `cacheRead` IS included, unlike in `getLifetimeTotal`: pi sums it across a
- * session's own assistant messages, and the prefix genuinely is re-read and
- * re-billed on every call. Only `total` is populated on the cost breakdown; pi
- * reads nothing else from it, and the per-kind split is not tracked.
+ * `cacheRead` is included at its full (unweighted) value, unlike in the
+ * weighted `getLifetimeTotal`: pi sums it across a session's own assistant
+ * messages, and the prefix genuinely is re-read and re-billed on every call.
+ * Only `total` is populated on the cost breakdown; pi reads nothing else from
+ * it, and the per-kind split is not tracked.
  */
 export function toReportedUsage(u: LifetimeUsage): ReportedUsage | undefined {
   const { input, output, cacheWrite, cacheRead = 0, cost = 0 } = u;
@@ -130,29 +131,31 @@ export class PendingUsagePool {
 
 /** Minimal shape we read from upstream `getSessionStats()`. */
 export type SessionStatsLike = {
-  tokens: { input: number; output: number; cacheWrite: number };
+  tokens: { input: number; output: number; cacheWrite: number; cacheRead?: number };
   contextUsage?: { percent: number | null };
 };
 export type SessionLike = { getSessionStats(): SessionStatsLike };
 
 /**
- * Session-scoped token count: input + output + cacheWrite as reported by
- * upstream `getSessionStats().tokens` for the *current* session window.
+ * Session-scoped weighted token score (same formula as getLifetimeTotal).
+ * It is reported by upstream `getSessionStats().tokens` for the *current*
+ * session window.
  *
  * RESETS at compaction — upstream replaces `session.state.messages` and the
  * stats are derived from that array. For a lifetime total that survives
  * compaction, use `getLifetimeTotal(lifetimeUsage)` instead, which reads
  * from an independent accumulator fed by `message_end` events.
  *
- * Avoids upstream's `tokens.total` field, which sums per-turn `cacheRead`
- * and so counts the cumulative cached prefix N times across N turns
- * (issue #38).
+ * Avoids upstream's `tokens.total` field: it sums per-turn `cacheRead` and so
+ * counts the cumulative cached prefix N times across N turns (issue #38). The
+ * same weighted formula as the lifetime display keeps that prefix represented
+ * without letting it dominate the score.
  */
 export function getSessionTokens(session: SessionLike | undefined): number {
   if (!session) return 0;
   try {
     const t = session.getSessionStats().tokens;
-    return t.input + t.output + t.cacheWrite;
+    return Math.round(3 * t.output + t.input + 0.2 * (t.cacheRead ?? 0) + t.cacheWrite);
   } catch { return 0; }
 }
 

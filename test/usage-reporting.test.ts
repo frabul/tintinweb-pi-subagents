@@ -300,16 +300,16 @@ describe("reporting subagent usage back to the parent session", () => {
       expect((await completedPayload(pi)).usage.cost.total).toBe(0.01);
     });
 
-    it("keeps `tokens` as the display total it has always been", async () => {
+    it("keeps `tokens` as the weighted display total", async () => {
       // The other convention — a flat view model like pi's own SessionStats,
-      // excluding cacheRead (#38). It is not derived from `usage` and must not
-      // start matching it.
+      // with cacheRead represented at its reduced weight (#38). It is not
+      // derived from `usage` and must not start matching its plain billed sum.
       const { pi, tools } = boot({});
       runSpending({ input: 100, output: 50, cacheWrite: 10, cacheRead: 900, cost: 0.0123 });
 
       await spawn(tools, "tc-1");
 
-      expect((await completedPayload(pi)).tokens).toEqual({ input: 100, output: 50, total: 160 });
+      expect((await completedPayload(pi)).tokens).toEqual({ input: 100, output: 50, total: 440 });
     });
 
     it("omits usage entirely when nothing was spent", async () => {

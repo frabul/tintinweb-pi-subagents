@@ -295,19 +295,19 @@ describe("AgentWidget cost display", () => {
 
   it("shows the cost beside the token count when enabled", () => {
     const line = render(true, 0.0042);
-    expect(line).toContain("1.2k token");
+    expect(line).toContain("1.6k token");
     expect(line).toContain("~$0.0042");
   });
 
   it("shows no cost when disabled", () => {
     const line = render(false, 0.0042);
-    expect(line).toContain("1.2k token");
+    expect(line).toContain("1.6k token");
     expect(line).not.toContain("$");
   });
 
   it("shows no cost for an unpriced model, even when enabled", () => {
     const line = render(true, 0);
-    expect(line).toContain("1.2k token");
+    expect(line).toContain("1.6k token");
     expect(line).not.toContain("$");
   });
 
@@ -350,7 +350,7 @@ describe("AgentWidget cost display", () => {
     widget.update();
     const out = factory({ terminal: { columns: 200 }, requestRender: () => {} }, theme).render().join("\n");
 
-    expect(out).toContain("1.2k token");
+    expect(out).toContain("1.6k token");
     expect(out).toContain("~$0.0042");
   });
 
