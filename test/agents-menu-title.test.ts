@@ -16,7 +16,7 @@ describe("agentsMenuTitle", () => {
     const title = agentsMenuTitle([
       { lifetimeUsage: { input: 100, output: 200, cacheWrite: 50 }, toolUses: 3 },
     ]);
-    expect(title).toContain("Session total: 750 token · 3 tool uses");
+    expect(title).toContain("Session total: 750 token · 󱁤 3");
     expect(title).not.toContain("All-time total");
   });
 
@@ -29,14 +29,14 @@ describe("agentsMenuTitle", () => {
     });
     const title = agentsMenuTitle([]);
     // Weighted: 3 × 2000 + 1000 + 0.2 × 500 + 100 = 7200.
-    expect(title).toContain("All-time total: 7.2k token · ~$0.0042 · 5 tool uses · 2 runs · 120.0s");
+    expect(title).toContain("All-time total: 7.2k token · ~$0.0042 · 󱁤 5 · 2 runs · 120.0s");
     expect(title).not.toContain("Session total");
   });
 
   it("combines session and all-time totals", () => {
     accumulateLifetimeStats({ lifetimeUsage: { input: 10, output: 20, cacheWrite: 5 }, toolUses: 1, durationMs: 1_000, runs: 1 });
     const title = agentsMenuTitle([{ lifetimeUsage: { input: 100, output: 200, cacheWrite: 50, cost: 0.001 }, toolUses: 2 }]);
-    expect(title).toContain("Session total: 750 token · ~$0.001 · 2 tool uses");
-    expect(title).toContain("All-time total: 75 token · 1 tool use · 1 run · 1.0s");
+    expect(title).toContain("Session total: 750 token · ~$0.001 · 󱁤 2");
+    expect(title).toContain("All-time total: 75 token · 󱁤 1 · 1 run · 1.0s");
   });
 });

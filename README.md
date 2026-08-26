@@ -110,18 +110,18 @@ The extension renders a persistent widget above the editor showing active agents
 
 ```
 ● Agents
-├─ ⠹ Agent  Refactor auth module · ↻5≤30 · 5 tool uses · 33.8k token (62%) · 12.3s
+├─ ⠹ Agent  Refactor auth module · ↻5≤30 · 󱁤 5 · 🚀33.8k . 📜120k · 12.3s
 │    ⎿  editing 2 files…
-├─ ⠹ Explore  Find auth files · ↻3 · 3 tool uses · 12.4k token (8%) · 4.1s
+├─ ⠹ Explore  Find auth files · ↻3 · 󱁤 3 · 🚀12.4k · 4.1s
 │    ⎿  searching…
-├─ ⠹ Agent  Long-running task · ↻42 · 38 tool uses · 91.0k token (84% · ⇊2) · 2m17s
+├─ ⠹ Agent  Long-running task · ↻42 · 󱁤 38 · 🚀91.0k . 📜180k . 🗜2 · 2m17s
 │    ⎿  reading…
 └─ 2 queued
 ```
 
-The token field is annotated with two optional signals inside parens:
-- **`NN%`** — context-window utilization (color-coded: <70% dim, 70–85% warning, ≥85% error). Omitted when the model has no declared `contextWindow`, or briefly right after compaction.
-- **`⇊N`** — number of times the session has compacted, when > 0. Stays dim; the percent's color carries urgency.
+The token field carries two optional signals after the total, joined with ` . `:
+- **`📜NNk`** — current context length in tokens (the session's live context-window usage). Omitted when unknown.
+- **`🗜N`** — number of times the session has compacted, when > 0. Stays dim.
 
 ### FleetView
 
@@ -215,11 +215,11 @@ Agent completion notifications render Claude Code-style in the conversation:
 
 | State | Example |
 |-------|---------|
-| **Completed** | `✓ ↻8 · 5 tool uses · 33.8k token (62%) · 12.3s` / `⎿ Done` |
-| **Wrapped up** | `✓ ↻50≤50 · 50 tool uses · 89.1k token (84% · ⇊2) · 45.2s` / `⎿ Wrapped up (turn limit)` |
-| **Stopped** | `■ ↻3 · 3 tool uses · 12.4k token (8%)` / `⎿ Stopped` |
-| **Error** | `✗ ↻3 · 3 tool uses · 12.4k token (8%)` / `⎿ Error: timeout` |
-| **Aborted** | `✗ ↻55≤50 · 55 tool uses · 102.3k token (95% · ⇊3)` / `⎿ Aborted (max turns exceeded)` |
+| **Completed** | `✓ ↻8 · 󱁤 5 · 33.8k token (62%) · 12.3s` / `⎿ Done` |
+| **Wrapped up** | `✓ ↻50≤50 · 󱁤 50 · 89.1k token (84% · ⇊2) · 45.2s` / `⎿ Wrapped up (turn limit)` |
+| **Stopped** | `■ ↻3 · 󱁤 3 · 12.4k token (8%)` / `⎿ Stopped` |
+| **Error** | `✗ ↻3 · 󱁤 3 · 12.4k token (8%)` / `⎿ Error: timeout` |
+| **Aborted** | `✗ ↻55≤50 · 󱁤 55 · 102.3k token (95% · ⇊3)` / `⎿ Aborted (max turns exceeded)` |
 
 Completion notifications can be expanded (ctrl+o in pi) to show the full agent output.
 
@@ -227,7 +227,7 @@ Each agent streams its full conversation to a per-subagent transcript by default
 
 ```
 ✓ Find auth files completed
-  ↻3 · 3 tool uses · 12.4k token · 4.1s
+  ↻3 · 󱁤 3 · 12.4k token · 4.1s
   ⎿  Found 5 files related to authentication...
   transcript: /tmp/pi-subagents-501/home-user-project/sess-1/tasks/agent-abc123.output
 ```
@@ -644,7 +644,7 @@ Three things worth knowing about the numbers. Every token component is reported,
 
 ```text
 ├─ ⠹ Explore  inspect code · ↻3 · 8.2k token · ~$0.0042 · 4.1s
-✓ Explore  inspect code · ↻8 · 5 tool uses · ~$0.0181 · 12.3s
+✓ Explore  inspect code · ↻8 · 󱁤 5 · ~$0.0181 · 12.3s
 ```
 
 When several background agents finish together, their notification is topped with the batch total (`3 agents · 45.1k token · ~$0.042`) so the figures don't have to be added up by hand.
