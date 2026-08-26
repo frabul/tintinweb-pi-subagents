@@ -424,10 +424,17 @@ export class AgentManager {
       // Overwritten below when the spawn is actually queued; immediate starts
       // switch to "running" in startAgent.
       status: "queued",
+      // Flips to true when the run promise is created — the boundary between
+      // "queued / still starting up" and "actually executing". The permanent
+      // store folds only records past this point: a queued cancellation or a
+      // startup failure never ran, so it must not count as a run with an
+      // elapsed time.
+      started: false,
       toolUses: 0,
       startedAt: Date.now(),
       abortController,
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
+      ownLifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
       compactionCount: 0,
       // All records are detached. Keep the flag on the record for lifecycle
       // payload compatibility and for UI consumers that inspect it.
@@ -673,6 +680,7 @@ export class AgentManager {
       onTextDelta: options.onTextDelta,
       onAssistantUsage: (usage) => {
         addUsage(record.lifetimeUsage, usage);
+        addUsage(record.ownLifetimeUsage, usage);
         this.onUsage?.(record, usage);
         options.onAssistantUsage?.(usage);
       },
@@ -821,6 +829,11 @@ export class AgentManager {
         return "";
       });
 
+    // Only a record whose run promise was created ever actually executed:
+    // startup failures (strict worktree isolation) and stops landing before
+    // `runAgent` was invoked throw/return before this line, so `started` stays
+    // false and the eviction fold below skips the record entirely.
+    record.started = true;
     record.promise = promise;
 
     // Notify caller that spawn is complete (record is in the map, promise is set).
@@ -1033,6 +1046,7 @@ export class AgentManager {
     // Synchronous coordinator resume: run inline and return the settled record.
     record.status = "running";
     record.startedAt = Date.now();
+    record.started = true;
     record.completedAt = undefined;
     record.result = undefined;
     record.error = undefined;
@@ -1045,6 +1059,7 @@ export class AgentManager {
         },
         onAssistantUsage: (usage) => {
           addUsage(record.lifetimeUsage, usage);
+          addUsage(record.ownLifetimeUsage, usage);
           this.onUsage?.(record, usage);
           options?.onAssistantUsage?.(usage);
         },
@@ -1092,6 +1107,7 @@ export class AgentManager {
 
     record.status = "running";
     record.startedAt = Date.now();
+    record.started = true;
     if (occupiesPoolSlot(record)) this.runningBackground++;
     this.onStart?.(record);
 
@@ -1135,6 +1151,7 @@ export class AgentManager {
       },
       onAssistantUsage: (usage) => {
         addUsage(record.lifetimeUsage, usage);
+        addUsage(record.ownLifetimeUsage, usage);
         this.onUsage?.(record, usage);
         options.onAssistantUsage?.(usage);
       },
@@ -1296,12 +1313,29 @@ export class AgentManager {
     // though the record itself is gone. (The quit path clears the map directly
     // in dispose() — with an in-memory store there is nothing left to read
     // after the process exits, so no fold is needed there.)
-    accumulateLifetimeStats({
-      lifetimeUsage: record.lifetimeUsage,
-      toolUses: record.toolUses,
-      durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
-      runs: 1,
-    });
+    //
+    // Only a record that actually began executing counts as a run: a queued
+    // cancellation, an already-aborted queued spawn, or a startup failure never
+    // reached the run promise (`started` stays false), so folding it would bump
+    // the all-time run count and book queue/startup elapsed time as if it were
+    // a run. Its usage and tool uses are zero by construction, so skipping the
+    // fold loses nothing. A started run is counted even at zero tokens — runs
+    // and duration describe the execution, not the spend.
+    if (record.started) {
+      accumulateLifetimeStats({
+        // Own spend only, deliberately: `lifetimeUsage` also carries every
+        // descendant's usage — nested-tools.ts books a hidden child's spend
+        // into the whole ancestor chain so it shows up on a record a human can
+        // see. Each descendant folds its own spend when IT is evicted, so
+        // folding the ancestor's `lifetimeUsage` here would count every nested
+        // agent's work twice. `ownLifetimeUsage` is the non-overlapping source:
+        // the record's own `message_end` deltas and nothing that was propagated.
+        lifetimeUsage: record.ownLifetimeUsage,
+        toolUses: record.toolUses,
+        durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
+        runs: 1,
+      });
+    }
     const session = record.session;
     // Detached before the shutdown starts, so the record leaves the map at once and
     // nothing can observe a session that is half torn down.
