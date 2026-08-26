@@ -60,7 +60,12 @@ function ctx() {
 
 /** What a child session reports about itself once pi has resolved it. */
 function session(provider: string, id: string, thinkingLevel: string, name?: string) {
-  return { model: { provider, id, name: name ?? MODEL_NAMES[id] }, thinkingLevel, dispose: vi.fn() } as never;
+  return {
+    model: { provider, id, name: name ?? MODEL_NAMES[id] },
+    thinkingLevel,
+    messages: [],
+    dispose: vi.fn(),
+  } as never;
 }
 
 const MODELS = [
@@ -69,17 +74,6 @@ const MODELS = [
 ];
 
 const MODEL_NAMES: Record<string, string> = Object.fromEntries(MODELS.map(m => [m.id, m.name]));
-
-const theme = { fg: (_c: string, t: string) => t, bold: (t: string) => t } as any;
-
-function render(tool: any, result: any, expanded = false): string {
-  return tool.renderResult(
-    { content: result.content, details: result.details },
-    { expanded, isPartial: false },
-    theme,
-    { isError: false },
-  ).render(200).join("\n");
-}
 
 /**
  * Write a real agent file. In-memory registration is not enough: the Agent tool
@@ -120,7 +114,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("Agent tool result — effective model", () => {
+describe("Agent launch metadata — effective model", () => {
   it("names the model even when the child inherited the parent's", async () => {
     // The old rule was "show it only when it differs from the parent", which
     // left `thinking: high` attached to nothing on the common path.
@@ -133,21 +127,19 @@ describe("Agent tool result — effective model", () => {
 
     const result = await tool.execute(
       "tc-1",
-      { prompt: "go", description: "d", subagent_type: "general-purpose", run_in_background: false },
+      { prompt: "go", description: "d", subagent_type: "general-purpose" },
       undefined,
       vi.fn(),
       ctx(),
     );
 
     expect(result.details.modelName).toBe("opus 4.6");
-    expect(render(tool, result)).toContain("opus 4.6");
-    expect(render(tool, result, true)).toContain("opus 4.6");
   });
 
-  it("names the inherited model while streaming, before a session exists", async () => {
-    // The streaming row renders from the pre-session snapshot, which the old
-    // "only when it differs from the parent" rule left empty for every agent
-    // that inherited — the level had nothing to attach itself to.
+  it("does not stream a partial result", async () => {
+    // Agent execution is detached. The removed inline renderer consumed onUpdate
+    // frames for a synchronous call; callers now receive one background handoff
+    // and later get completion details through the notification/result tools.
     vi.mocked(runAgent).mockImplementation(async (_c: any, _t: any, _p: any, options: any) => {
       options.onToolActivity?.({ type: "start", toolName: "Read" });
       const s = session("anthropic", "claude-opus-4-6", "high");
@@ -157,18 +149,17 @@ describe("Agent tool result — effective model", () => {
     const tool = agentTool();
     const onUpdate = vi.fn();
 
-    await tool.execute(
+    const result = await tool.execute(
       "tc-1b",
-      { prompt: "go", description: "d", subagent_type: "general-purpose", run_in_background: false },
+      { prompt: "go", description: "d", subagent_type: "general-purpose" },
       undefined,
       onUpdate,
       ctx(),
     );
 
-    const streamed = onUpdate.mock.calls[0][0];
-    expect(streamed.details.modelName).toBe("opus 4.6");
-    expect(tool.renderResult(streamed, { expanded: false, isPartial: true }, theme, { isError: false })
-      .render(200).join("\n")).toContain("opus 4.6");
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(result.details.status).toBe("background");
+    expect(result.content[0].text).toContain("Agent ID:");
   });
 
   it("keeps the twin label beside the model", async () => {
@@ -183,14 +174,13 @@ describe("Agent tool result — effective model", () => {
 
     const result = await tool.execute(
       "tc-2",
-      { prompt: "go", description: "d", subagent_type: "general-purpose", run_in_background: false },
+      { prompt: "go", description: "d", subagent_type: "general-purpose" },
       undefined,
       vi.fn(),
       ctx(),
     );
 
     expect(result.details.tags).toContain("twin");
-    expect(render(tool, result)).toContain("twin");
   });
 
   it("reports the session's level, and what was asked for, when pi clamps it", async () => {
@@ -203,7 +193,7 @@ describe("Agent tool result — effective model", () => {
 
     const result = await tool.execute(
       "tc-3",
-      { prompt: "go", description: "d", subagent_type: "general-purpose", thinking: "max", run_in_background: false },
+      { prompt: "go", description: "d", subagent_type: "general-purpose", thinking: "max" },
       undefined,
       vi.fn(),
       ctx(),
@@ -299,14 +289,14 @@ describe("Agent tool result — effective model", () => {
 
     const result = await tool.execute(
       "tc-6",
-      { prompt: "go", description: "d", subagent_type: "general-purpose", thinking: "high", run_in_background: false },
+      { prompt: "go", description: "d", subagent_type: "general-purpose", thinking: "high" },
       undefined,
       vi.fn(),
       ctx(),
     );
 
     expect(result.details.tags).toContain("thinking: high");
-    expect(render(tool, result)).not.toContain("asked");
+    expect(result.details.tags).not.toContain("asked");
   });
 });
 
@@ -326,7 +316,7 @@ describe("Agent tool result — resume", () => {
 
     const first = await tool.execute(
       "tc-7",
-      { prompt: "go", description: "original", subagent_type: "general-purpose", run_in_background: false },
+      { prompt: "go", description: "original", subagent_type: "general-purpose" },
       undefined,
       vi.fn(),
       context,
@@ -338,7 +328,6 @@ describe("Agent tool result — resume", () => {
         prompt: "continue",
         description: "changed",
         subagent_type: "general-purpose",
-        run_in_background: false,
         model: "anthropic/claude-opus-4-6",
         thinking: "max",
         resume: first.details.agentId,
@@ -350,6 +339,9 @@ describe("Agent tool result — resume", () => {
 
     expect(resumed.details.modelName).toBe("haiku 4.5");
     expect(resumed.details.tags).toContain("thinking: low");
-    expect(render(tool, resumed)).not.toContain("opus 4.6");
+    expect(resumed.details.status).toBe("background");
+    expect(resumed.content[0].text).toContain("You will be notified");
+    expect(resumed.content[0].text).not.toContain("second");
+    expect(resumed.details.tags).not.toContain("thinking: max");
   });
 });

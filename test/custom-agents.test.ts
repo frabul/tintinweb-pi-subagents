@@ -1117,17 +1117,15 @@ Good body.`);
       expect(loaded.isolation).toBe("worktree");
     });
 
-    // The writer used to emit `run_in_background` only when truthy, so an
-    // explicit `false` was dropped. Harmless while foreground was the default
-    // and omission meant the same thing — but with `backgroundByDefault` on,
-    // dropping it flips the ejected agent to background.
-    it("preserves an explicit run_in_background: false instead of dropping it", () => {
+    // Legacy frontmatter is still round-tripped for compatibility even though
+    // the runtime ignores it and every launch is detached.
+    it("preserves a legacy run_in_background: false field", () => {
       expect(roundTrip({ runInBackground: false }).runInBackground).toBe(false);
     });
 
-    it("leaves run_in_background unset when the config doesn't pin it", () => {
-      // Absent must stay absent — writing a value would freeze the agent
-      // against the setting rather than letting it follow the default.
+    it("leaves legacy run_in_background unset when the config doesn't pin it", () => {
+      // Absent must stay absent rather than adding a compatibility field to a
+      // newly generated definition.
       expect(roundTrip({}).runInBackground).toBeUndefined();
     });
 

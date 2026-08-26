@@ -23,7 +23,7 @@ import subagentsExtension from "../src/index.js";
 import { addUsage } from "../src/usage.js";
 import { ctx, flush, type Hermetic, hermeticDir, makePi } from "./helpers/boot-extension.js";
 
-/** Drive one foreground run that spends `usage` on a single assistant message. */
+/** Drive one detached run that spends `usage` on a single assistant message. */
 function runSpending(usage: { input: number; output: number; cacheWrite: number; cacheRead?: number; cost?: number }) {
   vi.mocked(runAgent).mockImplementation(async (_c: any, _t: any, _p: any, opts: any) => {
     opts.onAssistantUsage?.(usage);
@@ -41,7 +41,7 @@ function runSpendingNothing() {
 const spawn = (tools: Map<string, any>, toolCallId: string | undefined) =>
   tools.get("Agent").execute(
     toolCallId,
-    { prompt: "go", description: "spend", subagent_type: "general-purpose", run_in_background: false },
+    { prompt: "go", description: "spend", subagent_type: "general-purpose" },
     undefined, undefined, ctx(),
   );
 
@@ -120,9 +120,9 @@ describe("reporting subagent usage back to the parent session", () => {
     const result = await spawn(tools, "tc-1");
 
     expect(result.usage).toBeUndefined();
-    // And the text result is untouched — the setting must not change what the
-    // orchestrator reads.
-    expect(result.content[0].text).toContain("Agent completed");
+    // And the text result is still the detached handoff — the setting must not
+    // change what the orchestrator reads.
+    expect(result.content[0].text).toContain("started in background");
   });
 
   it("defaults to off", async () => {
@@ -217,7 +217,7 @@ describe("reporting subagent usage back to the parent session", () => {
         const { manager, parentAgentId } = opts.nestedRuntime;
         const childId = manager.spawn(pi, ctx(), "general-purpose", "sub", {
           description: "nested",
-          isBackground: false,
+          isBackground: true,
           parentAgentId,
           // The ancestor walk, verbatim from nested-tools.
           onAssistantUsage: (u: any) => addUsage(manager.getRecord(parentAgentId).lifetimeUsage, u),
@@ -253,7 +253,7 @@ describe("reporting subagent usage back to the parent session", () => {
     const id = pi.events.emit.mock.calls.find((c: any[]) => c[0] === "subagents:completed")?.[1]?.id;
     const result = await tools.get("Agent").execute(
       "tc-2",
-      { prompt: "more", description: "spend", subagent_type: "general-purpose", resume: id, run_in_background: false },
+      { prompt: "more", description: "spend", subagent_type: "general-purpose", resume: id },
       undefined, undefined, ctx(),
     );
 

@@ -91,7 +91,7 @@ export interface AgentDetails {
 
 // ---- Formatting helpers ----
 
-/** Apply foreground styling while restoring it after nested foreground/full ANSI resets. */
+/** Apply ANSI text styling while restoring it after nested/full resets. */
 export function fgPreservingNestedStyles(theme: Theme, color: string, text: string): string {
   const styledEmpty = theme.fg(color, "");
   const styleStart = styledEmpty.replace(/\u001b\[(?:0|39)m/g, "");
@@ -271,9 +271,9 @@ export class AgentWidget {
     private manager: AgentManager,
     private agentActivity: Map<string, AgentActivity>,
     /**
-     * Read live at render time. Selects which agents the widget shows — see
-     * `WidgetMode`. Defaults to `"all"` when a caller supplies no policy; the
-     * extension supplies one defaulting to `"background"`.
+     * Read live at render time. Selects whether the widget is shown — see
+     * `WidgetMode`. The `background` value remains accepted for config
+     * compatibility; all agents are detached.
      */
     private mode: () => WidgetMode = () => "all",
     /**
@@ -292,24 +292,10 @@ export class AgentWidget {
     private showModel: () => boolean = () => false,
   ) {}
 
-  /**
-   * Agents eligible for the widget, per the current `WidgetMode`:
-   *   - `off`: none (the widget's existing empty-state path hides it entirely).
-   *   - `background`: drop only agents *known* to be foreground
-   *     (`isBackground === false`); keep everything else — background, queued,
-   *     scheduled, or RPC-spawned (`undefined`). Keying off the `isBackground`
-   *     record flag rather than the UI-only `invocation` snapshot (which only the
-   *     Agent-tool path sets), and excluding rather than allow-listing, means
-   *     only proven-foreground runs drop out — nothing else silently vanishes.
-   *   - `all`: every agent.
-   */
+  /** Agents eligible for the widget, per the current `WidgetMode`. */
   private widgetAgents() {
     const all = this.manager.listAgents().filter(isTopLevelAgent);
-    switch (this.mode()) {
-      case "off": return [];
-      case "background": return all.filter(a => a.isBackground !== false);
-      default: return all;
-    }
+    return this.mode() === "off" ? [] : all;
   }
 
   /** Set the UI context (grabbed from first tool execution). */

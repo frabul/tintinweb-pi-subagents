@@ -46,7 +46,7 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.thinking).toBe("high");
     expect(resolved.maxTurns).toBe(42);
     expect(resolved.inheritContext).toBe(false);
-    expect(resolved.runInBackground).toBe(false);
+    expect(resolved.runInBackground).toBe(true);
     expect(resolved.isolated).toBe(false);
     expect(resolved.isolation).toBe("worktree");
   });
@@ -91,7 +91,7 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.isolated).toBe(true);
   });
 
-  it("defaults booleans to false when neither config nor params set them", () => {
+  it("defaults execution to background when neither config nor params set it", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({
         inheritContext: undefined,
@@ -102,7 +102,7 @@ describe("resolveAgentInvocationConfig", () => {
     );
 
     expect(resolved.inheritContext).toBe(false);
-    expect(resolved.runInBackground).toBe(false);
+    expect(resolved.runInBackground).toBe(true);
     expect(resolved.isolated).toBe(false);
   });
 
@@ -138,14 +138,10 @@ describe("resolveAgentInvocationConfig", () => {
 });
 
 describe("resolveJoinMode", () => {
-  it("returns the global default for background agents", () => {
-    expect(resolveJoinMode("smart", true)).toBe("smart");
-    expect(resolveJoinMode("async", true)).toBe("async");
-  });
-
-  it("ignores join mode for foreground agents", () => {
-    expect(resolveJoinMode("smart", false)).toBeUndefined();
-    expect(resolveJoinMode("group", false)).toBeUndefined();
+  it("returns the global default for every detached agent", () => {
+    expect(resolveJoinMode("smart")).toBe("smart");
+    expect(resolveJoinMode("async")).toBe("async");
+    expect(resolveJoinMode("group")).toBe("group");
   });
 });
 

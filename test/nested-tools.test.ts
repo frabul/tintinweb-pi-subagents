@@ -12,7 +12,6 @@ let cwd: string;
 let manager: NestedAgentManager;
 let records: Map<string, any>;
 let spawn: ReturnType<typeof vi.fn>;
-let spawnAndWait: ReturnType<typeof vi.fn>;
 
 function writeAgent(name: string, extra = "") {
   const dir = join(cwd, ".pi", "agents");
@@ -69,15 +68,8 @@ beforeEach(() => {
     records.set(id, { id, type, status: "running", parentAgentId: options.parentAgentId });
     return id;
   });
-  spawnAndWait = vi.fn(async (_pi, _ctx, type, _prompt, options) => {
-    const id = `child-${records.size + 1}`;
-    const record = { id, type, status: "completed", result: "done", parentAgentId: options.parentAgentId };
-    records.set(id, record);
-    return { id, record };
-  });
   manager = {
     spawn,
-    spawnAndWait,
     awaitStartup: vi.fn(async () => {}),
     getRecord: (id: string) => records.get(id),
     resume: vi.fn(),
@@ -99,15 +91,15 @@ describe("child-safe nested Agent tools", () => {
     });
 
     expect(result.isError).toBe(false);
-    expect(spawnAndWait).toHaveBeenCalledWith(
+    expect(spawn).toHaveBeenCalledWith(
       expect.anything(), expect.anything(), "reviewer", "Review it",
       expect.objectContaining({
         depth: 2,
         parentAgentId: "parent-1",
         maxSubagentDepth: 2,
         configCwd: cwd,
+        isBackground: true,
       }),
-      expect.any(Function), // onSpawned — attaches the child's transcript
     );
   });
 
@@ -127,7 +119,7 @@ describe("child-safe nested Agent tools", () => {
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("Unknown or disabled");
-      expect(spawnAndWait).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
     } finally {
       rmSync(workCwd, { recursive: true, force: true });
     }
@@ -142,7 +134,7 @@ describe("child-safe nested Agent tools", () => {
     });
     expect(denied.isError).toBe(true);
     expect(denied.content[0].text).toContain("not allowed");
-    expect(spawnAndWait).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
 
     const allowed = await execute(limited, {
       subagent_type: "scout",
@@ -150,7 +142,7 @@ describe("child-safe nested Agent tools", () => {
       prompt: "Find them",
     });
     expect(allowed.isError).toBe(false);
-    expect(spawnAndWait).toHaveBeenCalledTimes(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it("resolves nested types without touching the process-global registry", async () => {
@@ -196,7 +188,7 @@ describe("child-safe nested Agent tools", () => {
     });
     expect(blocked.isError).toBe(true);
     expect(blocked.content[0].text).toContain("Model not in scope");
-    expect(spawnAndWait).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
 
     const inScope = await execute(agent, {
       subagent_type: "scout",
@@ -232,7 +224,7 @@ describe("child-safe nested Agent tools", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("depth=2, max=2");
-    expect(spawnAndWait).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("rejects unknown or disabled nested agent types instead of falling back", async () => {
@@ -373,7 +365,7 @@ describe("child-safe nested Agent tools", () => {
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("Unknown or disabled nested agent type");
-      expect(spawnAndWait).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
     } finally {
       setFallbackSubagent(undefined);
     }
@@ -388,31 +380,24 @@ describe("child-safe nested Agent tools", () => {
     });
 
     expect(result.isError).toBe(false);
-    expect(spawnAndWait).toHaveBeenCalledWith(
+    expect(spawn).toHaveBeenCalledWith(
       expect.anything(), expect.anything(), "scout", "Do work",
-      expect.objectContaining({ depth: 2, maxSubagentDepth: 3 }),
-      expect.any(Function),
+      expect.objectContaining({ depth: 2, maxSubagentDepth: 3, isBackground: true }),
     );
   });
 
   it("flags a truncated child run instead of passing partial output off as complete", async () => {
-    spawnAndWait.mockImplementation(async () => ({
-      id: "child-1",
-      record: { id: "child-1", status: "steered", result: "half an answer", parentAgentId: "parent-1" },
-    }));
-    const [agent] = tools();
-    const result = await execute(agent, {
-      subagent_type: "scout",
-      description: "truncated",
-      prompt: "Do work",
+    records.set("child-1", {
+      id: "child-1", status: "steered", result: "half an answer", parentAgentId: "parent-1",
     });
+    const [, getResult] = tools();
+    const result = await execute(getResult, { agent_id: "child-1" });
 
     expect(result.isError).toBe(false);
-    // Foreground: the whole output is inline and no id came back, so the note
-    // must not invite a get_subagent_result call the parent cannot make (#174).
-    expect(result.content[0].text).toContain("everything the agent produced is above");
-    expect(result.content[0].text).not.toContain("output is partial");
-    // The warning leads, so it can't read as part of the child's own answer.
+    // Detached nested runs are retrieved by id, so the status note must make
+    // the partial result explicit rather than presenting it as a clean answer.
+    expect(result.content[0].text).toContain("output may be partial");
+    expect(result.content[0].text).not.toContain("everything the agent produced is above");
     expect(result.content[0].text.indexOf("half an answer")).toBeGreaterThan(0);
   });
 
@@ -429,19 +414,12 @@ describe("child-safe nested Agent tools", () => {
   });
 
   it("keeps a failed child's partial output alongside the error", async () => {
-    spawnAndWait.mockImplementation(async () => ({
-      id: "child-1",
-      record: {
-        id: "child-1", status: "error", error: "provider exploded",
-        result: "got this far", parentAgentId: "parent-1",
-      },
-    }));
-    const [agent] = tools();
-    const result = await execute(agent, {
-      subagent_type: "scout",
-      description: "failing",
-      prompt: "Do work",
+    records.set("child-1", {
+      id: "child-1", status: "error", error: "provider exploded",
+      result: "got this far", parentAgentId: "parent-1",
     });
+    const [, getResult] = tools();
+    const result = await execute(getResult, { agent_id: "child-1" });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("provider exploded");
@@ -496,11 +474,10 @@ describe("child-safe nested Agent tools", () => {
 
   it("files a nested transcript under the root session, honoring output_transcript", async () => {
     records.set("parent-1", { id: "parent-1", status: "running", rootSessionId: "root-session" });
-    spawnAndWait.mockImplementation(async (_pi, _ctx, type, _prompt, options, onSpawned) => {
-      const record = { id: "child-1", type, status: "completed", result: "done", parentAgentId: options.parentAgentId };
+    spawn.mockImplementation((_pi, _ctx, type, _prompt, options) => {
+      const record = { id: "child-1", type, status: "running", parentAgentId: options.parentAgentId };
       records.set("child-1", record);
-      onSpawned?.("child-1");
-      return { id: "child-1", record };
+      return "child-1";
     });
 
     // Real path construction (not mocked here), so clean up what it writes.
@@ -533,7 +510,7 @@ describe("child-safe nested Agent tools", () => {
       prompt: "Do work",
     } as any, undefined, undefined, executionCtx);
 
-    expect(spawnAndWait.mock.calls[0][1]).toBe(executionCtx);
+    expect(spawn.mock.calls[0][1]).toBe(executionCtx);
   });
 });
 

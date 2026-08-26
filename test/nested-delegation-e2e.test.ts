@@ -112,19 +112,18 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
       // Middle: opted in, so pi must have admitted the injected Agent tool.
       if (text.includes("Delegate this downward")) {
         toolsSeen.set("orchestrator", names);
-        const alreadySpawned = context.messages.some(
-          (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
-        );
-        if (alreadySpawned) {
-          const result = [...context.messages]
-            .reverse()
-            .find((m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent");
-          const inner = ((result?.content ?? []) as Array<{ text?: string }>)
-            .map((b) => b.text ?? "")
-            .join("");
+        const results = toolResultTexts(context);
+        const spawned = results.find((result) => result.name === "Agent")?.text;
+        const fetched = results.find((result) => result.name === "get_subagent_result")?.text;
+        if (fetched !== undefined) {
           // Echo the child's own text: if it never arrived, the marker is absent
           // and the top-level assertion fails rather than passing vacuously.
-          return `orchestrator saw: ${inner}`;
+          return `orchestrator saw: ${fetched}`;
+        }
+        if (spawned) {
+          const id = /Agent ID:\s*(\S+)/.exec(spawned)?.[1];
+          expect(id).toBeTruthy();
+          return fauxToolCall("get_subagent_result", { agent_id: id, wait: true });
         }
         return agentCall({
           subagent_type: "worker",
@@ -135,24 +134,19 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
 
       // Top-level parent.
       toolsSeen.set("parent", names);
-      const spawned = context.messages.some(
-        (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
-      );
+      const results = toolResultTexts(context);
+      const spawned = results.find((result) => result.name === "Agent")?.text;
+      const fetched = results.find((result) => result.name === "get_subagent_result")?.text;
+      if (fetched !== undefined) return `parent saw: ${fetched}`;
       if (spawned) {
-        const result = [...context.messages]
-          .reverse()
-          .find((m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent");
-        const inner = ((result?.content ?? []) as Array<{ text?: string }>)
-          .map((b) => b.text ?? "")
-          .join("");
-        return `parent saw: ${inner}`;
+        const id = /Agent ID:\s*(\S+)/.exec(spawned)?.[1];
+        expect(id).toBeTruthy();
+        return fauxToolCall("get_subagent_result", { agent_id: id, wait: true });
       }
       return agentCall({
         subagent_type: "orchestrator",
         description: "delegate",
         prompt: "Delegate this downward.",
-        // Foreground: this test reads the parent's inline Agent tool result.
-        run_in_background: false,
       });
     };
 
@@ -207,17 +201,22 @@ describe("nested delegation e2e (real pi-mono, faux model)", () => {
           subagent_type: "worker",
           description: "leaf work",
           prompt: "Do the leaf work.",
-          run_in_background: true,
         });
       }
 
-      if (toolResultTexts(context).some((r) => r.name === "Agent")) return "parent done";
+      const results = toolResultTexts(context);
+      const spawned = results.find((r) => r.name === "Agent")?.text ?? "";
+      const fetched = results.find((r) => r.name === "get_subagent_result")?.text;
+      if (fetched !== undefined) return "parent done";
+      if (spawned) {
+        const id = /Agent ID:\s*(\S+)/.exec(spawned)?.[1];
+        expect(id).toBeTruthy();
+        return fauxToolCall("get_subagent_result", { agent_id: id, wait: true });
+      }
       return agentCall({
         subagent_type: "orchestrator",
         description: "delegate",
         prompt: "Delegate this downward.",
-        // Foreground: this test reads the parent's inline Agent tool result.
-        run_in_background: false,
       });
     };
 

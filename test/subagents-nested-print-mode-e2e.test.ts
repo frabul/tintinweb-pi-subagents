@@ -3,7 +3,7 @@
  * opt-in nested delegation after #164 landed.
  *
  * `test/nested-delegation-e2e.test.ts` already pins the happy path (tool
- * admission + two-hop foreground return + background poll/transcript). This
+ * admission + two-hop detached return + background poll/transcript). This
  * file covers the production-boundary cases that suite still leaves open:
  * default-off injection, depth-cap tool stripping, background parent holds
  * while a child nests, and cross-parent ownership denial against the published
@@ -165,15 +165,24 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
           observed.set(route, tools(ctx));
           return "PLAIN_CHILD_RESULT";
         }
-        if (toolResults(ctx, "Agent").length === 0) {
+        const agents = toolResults(ctx, "Agent");
+        if (agents.length === 0) {
           return agentCall({
             subagent_type: "plain",
             description: "plain child",
             prompt: "plain-child",
-            run_in_background: false,
           });
         }
-        return lastToolResult(ctx, "Agent");
+        if (toolResults(ctx, "get_subagent_result").length === 0) {
+          const id = agents[0].match(/Agent ID: ([^\s]+)/)?.[1];
+          if (!id) throw new Error(`No background agent ID in: ${agents[0]}`);
+          return toolCall(
+            "get_subagent_result",
+            { agent_id: id, wait: true },
+            "get-plain-result",
+          );
+        }
+        return lastToolResult(ctx, "get_subagent_result");
       },
       { prompt: "root-default" },
     ));
@@ -204,25 +213,43 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
           return `AT_CAP tools=${nested.length === 0 ? "none" : nested.join(",")}`;
         }
         if (route === "level_one-child") {
-          if (toolResults(ctx, "Agent").length === 0) {
+          const agents = toolResults(ctx, "Agent");
+          if (agents.length === 0) {
             return agentCall({
               subagent_type: "level_two",
               description: "allowed level",
               prompt: "level_two-child",
-              run_in_background: false,
             });
           }
-          return lastToolResult(ctx, "Agent");
+          if (toolResults(ctx, "get_subagent_result").length === 0) {
+            const id = agents[0].match(/Agent ID: ([^\s]+)/)?.[1];
+            if (!id) throw new Error(`No nested agent ID in: ${agents[0]}`);
+            return toolCall(
+              "get_subagent_result",
+              { agent_id: id, wait: true },
+              "get-level-two-result",
+            );
+          }
+          return lastToolResult(ctx, "get_subagent_result");
         }
-        if (toolResults(ctx, "Agent").length === 0) {
+        const agents = toolResults(ctx, "Agent");
+        if (agents.length === 0) {
           return agentCall({
             subagent_type: "level_one",
             description: "recursive chain",
             prompt: "level_one-child",
-            run_in_background: false,
           });
         }
-        return lastToolResult(ctx, "Agent");
+        if (toolResults(ctx, "get_subagent_result").length === 0) {
+          const id = agents[0].match(/Agent ID: ([^\s]+)/)?.[1];
+          if (!id) throw new Error(`No background agent ID in: ${agents[0]}`);
+          return toolCall(
+            "get_subagent_result",
+            { agent_id: id, wait: true },
+            "get-level-one-result",
+          );
+        }
+        return lastToolResult(ctx, "get_subagent_result");
       },
       { prompt: "root-depth", maxModelCalls: 24 },
     ));
@@ -250,15 +277,24 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
           return "BACKGROUND_NESTED_RESULT";
         }
         if (route === "background-delegator-child") {
-          if (toolResults(ctx, "Agent").length === 0) {
+          const nestedAgents = toolResults(ctx, "Agent");
+          if (nestedAgents.length === 0) {
             return agentCall({
               subagent_type: "background_grandchild",
-              description: "nested foreground work",
+              description: "nested delegated work",
               prompt: "background-grandchild-child",
-              run_in_background: false,
             });
           }
-          return lastToolResult(ctx, "Agent");
+          if (toolResults(ctx, "get_subagent_result").length === 0) {
+            const id = nestedAgents[0].match(/Agent ID: ([^\s]+)/)?.[1];
+            if (!id) throw new Error(`No nested agent ID in: ${nestedAgents[0]}`);
+            return toolCall(
+              "get_subagent_result",
+              { agent_id: id, wait: true },
+              "get-grandchild-result",
+            );
+          }
+          return lastToolResult(ctx, "get_subagent_result");
         }
         const agents = toolResults(ctx, "Agent");
         if (agents.length === 0) {
@@ -284,7 +320,7 @@ describe("PR #164 nested agents through the real print-mode boundary", () => {
     ));
 
     expect(run.responseText).toContain("BACKGROUND_NESTED_RESULT");
-    expect(calls.get("background-delegator-child")).toBe(2);
+    expect(calls.get("background-delegator-child")).toBe(3);
     expect(calls.get("background-grandchild-child")).toBe(1);
     expect(
       run.parentSession.messages.some(

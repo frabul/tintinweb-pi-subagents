@@ -188,26 +188,11 @@ describe("Agent tool → schedule restrictions", () => {
     }
   });
 
-  it("refuses `schedule` with `run_in_background: false` rather than silently coercing it", async () => {
-    // README:91 long claimed this parameter was "forced to true". It is not —
-    // the call is refused. Silently flipping a parameter the caller explicitly
-    // set is the failure mode #37 was filed about; refusing is the intended
-    // behavior and this pins it.
-    const { reply, jobCount, restore } = await scheduleCall({ run_in_background: false });
-    try {
-      expect(reply).toBe(
-        "Cannot combine `schedule` with `run_in_background: false` — scheduled jobs always run in background.",
-      );
-      expect(jobCount).toBe(0);
-    } finally {
-      restore();
-    }
-  });
-
-  it("accepts `run_in_background: true` and an omitted `run_in_background`", async () => {
-    // The mirror: only an explicit `false` is refused, so a caller that sets the
-    // flag by habit is not blocked.
-    for (const params of [{ run_in_background: true }, {}]) {
+  it("accepts legacy `run_in_background` values and an omitted flag", async () => {
+    // The field is no longer in the Agent schema, but older callers may still
+    // send either value. Scheduling is detached regardless, so neither blocks
+    // nor changes the persisted job.
+    for (const params of [{ run_in_background: true }, { run_in_background: false }, {}]) {
       const { reply, jobCount, restore } = await scheduleCall(params);
       try {
         expect(reply).toContain("Scheduled");
