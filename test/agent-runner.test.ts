@@ -367,6 +367,15 @@ describe("agent-runner final output capture", () => {
     expect(setOrder).toBeLessThan(bindOrder);
   });
 
+  it("uses the task description as session name when provided", async () => {
+    const { session } = createSession("NAMED");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", { pi, description: "Audit the auth flow" });
+
+    expect(session.setSessionName).toHaveBeenCalledWith("Audit the auth flow");
+  });
+
   it("suffixes the session name with a short agentId so parallel spawns are distinguishable", async () => {
     const { session } = createSession("NAMED");
     createAgentSession.mockResolvedValue({ session });
