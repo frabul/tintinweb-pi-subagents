@@ -10,6 +10,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.js";
+import { getAllTimeStats, resetLifetimeStats } from "../src/lifetime-stats.js";
+import { addUsage } from "../src/usage.js";
 
 vi.mock("../src/agent-runner.js", () => ({
   runAgent: vi.fn(),
@@ -20,6 +22,7 @@ vi.mock("../src/worktree.js", () => ({
   createWorktree: vi.fn(),
   cleanupWorktree: vi.fn(() => ({ hasChanges: false })),
   pruneWorktrees: vi.fn(),
+  isWorktreeIsolationEnabled: vi.fn(() => true),
 }));
 
 import { runAgent } from "../src/agent-runner.js";
@@ -34,6 +37,8 @@ describe("AgentManager — record GC", () => {
   let manager: AgentManager;
 
   beforeEach(() => {
+    // The permanent store is module-level — start each test from zero.
+    resetLifetimeStats();
     // Before construction: the cleanup interval is started in the constructor.
     vi.useFakeTimers();
   });
@@ -152,6 +157,210 @@ describe("AgentManager — record GC", () => {
     await vi.advanceTimersByTimeAsync(TICK * 4);
     expect(manager.getRecord(id)).toBeUndefined(); // aged out on a later tick
   });
+
+  it("folds an evicted record's stats into the permanent store", async () => {
+    manager = new AgentManager();
+    const { id, record } = await settled("stale");
+    record.toolUses = 7;
+    record.lifetimeUsage = { input: 100, output: 50, cacheWrite: 10, cacheRead: 200, cost: 0.002 };
+    // Own spend, in this case identical to `lifetimeUsage`: a top-level agent
+    // with no descendants has nothing propagated into its record.
+    record.ownLifetimeUsage = { input: 100, output: 50, cacheWrite: 10, cacheRead: 200, cost: 0.002 };
+    // A real timeline: started 1 min before the cutoff, ran 30s, finished 30s
+    // before the cutoff — evictable now, with a positive, known duration.
+    record.startedAt = Date.now() - (TEN_MINUTES + 60_000);
+    record.completedAt = record.startedAt + 30_000;
+
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    expect(manager.getRecord(id)).toBeUndefined();
+    const stats = getAllTimeStats();
+    expect(stats.runs).toBe(1);
+    expect(stats.toolUses).toBe(7);
+    expect(stats.lifetimeUsage).toMatchObject({ input: 100, output: 50, cacheWrite: 10, cacheRead: 200, cost: 0.002 });
+    expect(stats.durationMs).toBe(30_000);
+  });
+
+  it("folds stats through clearCompleted() too", async () => {
+    manager = new AgentManager();
+    const { record } = await settled("swept");
+    record.toolUses = 3;
+
+    manager.clearCompleted();
+
+    expect(manager.listAgents()).toHaveLength(0);
+    const stats = getAllTimeStats();
+    expect(stats.runs).toBe(1);
+    expect(stats.toolUses).toBe(3);
+  });
+
+  it("counts a nested child's spend exactly once when parent and child are both evicted", async () => {
+    // nested-tools.ts books a hidden child's usage into every ancestor's
+    // `lifetimeUsage` so the top-level record shows the whole branch to the
+    // human. If removeRecord folded that field, a child evicted alongside its
+    // parent would be counted twice in the permanent store — once as the
+    // child's own fold, once inside the parent's. The fold reads
+    // `ownLifetimeUsage` (the record's own `message_end` deltas) instead, so
+    // every record contributes exactly itself.
+    manager = new AgentManager();
+    vi.mocked(runAgent).mockImplementation(async (_ctx, _type, _prompt, opts: any) => {
+      opts.onAssistantUsage?.({ input: 100, output: 50, cacheWrite: 5, cost: 0.002 });
+      return { responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: false } as any;
+    });
+
+    const parentId = manager.spawn(mockPi, mockCtx, "X", "parent", { description: "parent", isBackground: true });
+    const parent = manager.getRecord(parentId)!;
+    await parent.promise;
+    expect(parent.ownLifetimeUsage).toEqual({ input: 100, output: 50, cacheWrite: 5, cost: 0.002 });
+
+    const childId = manager.spawn(mockPi, mockCtx, "X", "child", {
+      description: "child",
+      isBackground: true,
+      parentAgentId: parentId,
+      // Exactly what nested-tools.ts passes for a nested spawn: every child
+      // usage event is also booked into the parent's (user-facing) record.
+      onAssistantUsage: (usage: any) => { addUsage(manager.getRecord(parentId)!.lifetimeUsage, usage); },
+    } as any);
+    await manager.getRecord(childId)!.promise;
+
+    // The parent now carries its own spend plus the child's — the shape the
+    // session/UI surfaces rely on.
+    expect(parent.lifetimeUsage).toEqual({ input: 200, output: 100, cacheWrite: 10, cost: 0.004 });
+    expect(manager.getRecord(childId)!.ownLifetimeUsage).toEqual({ input: 100, output: 50, cacheWrite: 5, cost: 0.002 });
+
+    // Both evictable in the same sweep.
+    const stale = Date.now() - (TEN_MINUTES + 30_000);
+    manager.getRecord(parentId)!.completedAt = stale;
+    manager.getRecord(childId)!.completedAt = stale;
+
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    expect(manager.getRecord(parentId)).toBeUndefined();
+    expect(manager.getRecord(childId)).toBeUndefined();
+    const stats = getAllTimeStats();
+    expect(stats.runs).toBe(2);
+    // Each agent's own spend once: 100/50/5 (parent) + 100/50/5 (child).
+    // Folding `lifetimeUsage` instead would have produced 300/150/15 — the
+    // child's spend in both records.
+    expect(stats.lifetimeUsage).toEqual({ input: 200, output: 100, cacheWrite: 10, cost: 0.004 });
+  });
+
+  it("counts a started run that produced zero tokens", async () => {
+    // A run that began executing but never emitted usage is still a run: the
+    // all-time store counts its run and duration, with zero usage/tool uses.
+    manager = new AgentManager();
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "silent",
+      session: { dispose: vi.fn() } as any,
+      aborted: false,
+      steered: false,
+    } as any);
+    const id = manager.spawn(mockPi, mockCtx, "X", "silent", { description: "silent", isBackground: true });
+    const record = manager.getRecord(id)!;
+    await record.promise;
+    expect(record.started).toBe(true);
+    record.startedAt = Date.now() - (TEN_MINUTES + 60_000);
+    record.completedAt = record.startedAt + 15_000;
+
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    expect(manager.getRecord(id)).toBeUndefined();
+    const stats = getAllTimeStats();
+    expect(stats.runs).toBe(1);
+    expect(stats.durationMs).toBe(15_000);
+    expect(stats.lifetimeUsage).toEqual({ input: 0, output: 0, cacheWrite: 0 });
+  });
+
+  it("does not fold a queued abort: a never-started record counts no run or duration", async () => {
+    manager = new AgentManager(undefined, 1); // one slot: the second spawn queues
+    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {})); // holder never settles
+    manager.spawn(mockPi, mockCtx, "X", "holder", { description: "holder", isBackground: true });
+    const waiterId = manager.spawn(mockPi, mockCtx, "X", "waiter", { description: "waiter", isBackground: true });
+    const waiter = manager.getRecord(waiterId)!;
+    expect(waiter.status).toBe("queued");
+
+    manager.abort(waiterId);
+    expect(waiter.status).toBe("stopped");
+    expect(waiter.started).toBe(false);
+    waiter.completedAt = Date.now() - (TEN_MINUTES + 30_000);
+
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    expect(manager.getRecord(waiterId)).toBeUndefined();
+    const stats = getAllTimeStats();
+    expect(stats.runs).toBe(0);
+    expect(stats.durationMs).toBe(0);
+    expect(stats.lifetimeUsage).toEqual({ input: 0, output: 0, cacheWrite: 0 });
+  });
+
+  it("does not fold an already-aborted queued spawn", async () => {
+    // armQueuedAbort marks a spawn given an already-aborted signal as stopped
+    // and never enqueues it — the record never executes, so it must not count.
+    manager = new AgentManager(undefined, 1);
+    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}));
+    manager.spawn(mockPi, mockCtx, "X", "holder", { description: "holder", isBackground: true });
+
+    const signal = new AbortController();
+    signal.abort();
+    const id = manager.spawn(mockPi, mockCtx, "X", "cancelled", {
+      description: "cancelled",
+      isBackground: true,
+      signal: signal.signal,
+    } as any);
+    const record = manager.getRecord(id)!;
+    expect(record.status).toBe("stopped");
+    expect(record.started).toBe(false);
+    record.completedAt = Date.now() - (TEN_MINUTES + 30_000);
+
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    expect(manager.getRecord(id)).toBeUndefined();
+    const stats = getAllTimeStats();
+    expect(stats.runs).toBe(0);
+    expect(stats.durationMs).toBe(0);
+  });
+
+  it("does not fold a queued spawn whose startup failed", async () => {
+    // Isolation startup runs after the queue drain: the failure lands on the
+    // record (status "error", no run promise) instead of the spawn call.
+    // `started` stays false, so the evicted record counts nothing.
+    manager = new AgentManager(undefined, 1);
+    // Holder occupies the only slot, so the worktree-isolated spawn queues…
+    let settleHolder!: (value: any) => void;
+    vi.mocked(runAgent).mockImplementation(() => new Promise(resolve => { settleHolder = resolve; }));
+    const holderId = manager.spawn(mockPi, mockCtx, "X", "holder", { description: "holder", isBackground: true });
+    const victimId = manager.spawn(mockPi, mockCtx, "X", "victim", {
+      description: "victim",
+      isBackground: true,
+      isolation: "worktree",
+    } as any);
+    const victim = manager.getRecord(victimId)!;
+    expect(victim.status).toBe("queued");
+
+    // …and when the holder settles, the drain starts it, where the mocked
+    // createWorktree (undefined) fails startup.
+    settleHolder({
+      responseText: "holder done",
+      session: { dispose: vi.fn() } as any,
+      aborted: false,
+      steered: false,
+    } as any);
+    await manager.getRecord(holderId)!.promise;
+    // Drain and startup failure complete in the microtask queue.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(victim.status).toBe("error");
+    expect(victim.promise).toBeUndefined();
+    expect(victim.started).toBe(false);
+    victim.completedAt = Date.now() - (TEN_MINUTES + 30_000);
+
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    expect(manager.getRecord(victimId)).toBeUndefined();
+    const stats = getAllTimeStats();
+    expect(stats.runs).toBe(0);
+    expect(stats.durationMs).toBe(0);
+  });
 });
 
 // Eviction is exactly the moment a handle would otherwise stop working. These
@@ -160,7 +369,10 @@ describe("AgentManager — record GC", () => {
 describe("AgentManager — tombstones outliving the GC", () => {
   let manager: AgentManager;
 
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => {
+    resetLifetimeStats();
+    vi.useFakeTimers();
+  });
   afterEach(() => {
     manager?.dispose();
     vi.useRealTimers();

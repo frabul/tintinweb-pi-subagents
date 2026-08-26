@@ -167,6 +167,14 @@ export interface AgentRecord {
   alias?: string;
   description: string;
   status: "queued" | "running" | "completed" | "steered" | "aborted" | "stopped" | "error";
+  /**
+   * Whether this record ever began executing — true once the run promise is
+   * created (spawn/startResume) or the inline coordinator resume starts.
+   * Records that never get there (queued cancellations, already-aborted
+   * queued spawns, startup failures) stay false: they have no run, so the
+   * permanent store must not count a run or an elapsed duration for them.
+   */
+  started: boolean;
   result?: string;
   error?: string;
   toolUses: number;
@@ -215,6 +223,17 @@ export interface AgentRecord {
    * are initialized to zero at spawn; optional fields may be absent.
    */
   lifetimeUsage: LifetimeUsage;
+  /**
+   * This record's OWN assistant usage — the `message_end` deltas of its own
+   * turns only. `lifetimeUsage` additionally carries every descendant's spend:
+   * nested-tools.ts deliberately books a hidden child's usage into the whole
+   * ancestor chain so it shows up on a record a human can see, which makes
+   * those records useless as a basis for anything that must count each message
+   * once. The permanent lifetime store folds `ownLifetimeUsage` — the
+   * non-overlapping accounting source. Same shape and eager initialization as
+   * `lifetimeUsage`.
+   */
+  ownLifetimeUsage: LifetimeUsage;
   /** Number of times this agent's session has compacted. Initialized to 0 at spawn. */
   compactionCount: number;
   /**
