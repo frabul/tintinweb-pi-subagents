@@ -458,6 +458,54 @@ describe("AgentManager — completion callbacks", () => {
   });
 });
 
+describe("AgentManager — limitReason write-back", () => {
+  let manager: AgentManager;
+
+  afterEach(() => {
+    manager?.dispose();
+  });
+
+  it("records the reason an aborted run stopped (context, not turns)", async () => {
+    manager = new AgentManager();
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "partial output",
+      session: mockSession(),
+      aborted: true,
+      steered: false,
+      limitReason: "context",
+    });
+
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+      description: "test",
+      isBackground: true,
+    });
+    await manager.getRecord(id)!.promise;
+
+    expect(manager.getRecord(id)!.status).toBe("aborted");
+    expect(manager.getRecord(id)!.limitReason).toBe("context");
+  });
+
+  it("records the reason a steered run wrapped up (turns)", async () => {
+    manager = new AgentManager();
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "done",
+      session: mockSession(),
+      aborted: false,
+      steered: true,
+      limitReason: "turns",
+    });
+
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "test", {
+      description: "test",
+      isBackground: true,
+    });
+    await manager.getRecord(id)!.promise;
+
+    expect(manager.getRecord(id)!.status).toBe("steered");
+    expect(manager.getRecord(id)!.limitReason).toBe("turns");
+  });
+});
+
 describe("AgentManager — cleanup timer", () => {
   let manager: AgentManager;
 

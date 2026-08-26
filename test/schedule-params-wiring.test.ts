@@ -20,7 +20,7 @@ vi.mock("../src/agent-runner.js", async () => {
   return { ...actual, runAgent: vi.fn() };
 });
 
-import { getDefaultMaxTurns, normalizeMaxTurns } from "../src/agent-runner.js";
+import { getDefaultMaxContextLength, getDefaultMaxTurns, normalizeMaxContextLength, normalizeMaxTurns } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 import { resolveStorePath, ScheduleStore } from "../src/schedule-store.js";
 import type { ScheduledSubagent } from "../src/types.js";
@@ -111,6 +111,30 @@ describe("Agent tool → persisted scheduled job", () => {
     const { job, restore } = await scheduleAndReadBack({ subagent_type: "general-purpose" });
     try {
       expect(job.max_turns).toBe(normalizeMaxTurns(getDefaultMaxTurns()));
+    } finally {
+      restore();
+    }
+  });
+
+  it("persists the normalized context limit, not the raw parameter", async () => {
+    // Same normalization contract as max_turns: max_context_length goes
+    // through normalizeMaxContextLength before it is stored, so `0` means
+    // "unlimited" rather than persisting "0 tokens" for the scheduled run.
+    const { job, restore } = await scheduleAndReadBack({
+      subagent_type: "general-purpose",
+      max_context_length: 0, // 0 means "unlimited", not "zero tokens"
+    });
+    try {
+      expect(job.max_context_length).toBe(normalizeMaxContextLength(0));
+    } finally {
+      restore();
+    }
+  });
+
+  it("falls back to the default context limit when the call omits one", async () => {
+    const { job, restore } = await scheduleAndReadBack({ subagent_type: "general-purpose" });
+    try {
+      expect(job.max_context_length).toBe(normalizeMaxContextLength(getDefaultMaxContextLength()));
     } finally {
       restore();
     }

@@ -87,6 +87,8 @@ export interface AgentDetails {
   cost?: number;
   agentId?: string;
   error?: string;
+  /** Which limit wrapped up or aborted the run; unset when none fired. */
+  limitReason?: "turns" | "context";
 }
 
 // ---- Formatting helpers ----
@@ -207,6 +209,9 @@ export function buildInvocationTags(
   if (invocation.inheritContext) tags.push("inherit context");
   if (invocation.runInBackground) tags.push("background");
   if (invocation.maxTurns != null) tags.push(`max turns: ${invocation.maxTurns}`);
+  // Explicit values only — the invocation snapshot never carries the 125k
+  // default, so an inherited cap renders no tag.
+  if (invocation.maxContextLength != null) tags.push(`max context: ${invocation.maxContextLength}`);
   return {
     modelName: asked(invocation.modelName, invocation.requestedModel),
     modelId: asked(invocation.modelId, invocation.requestedModel),
@@ -356,7 +361,7 @@ export class AgentWidget {
   }
 
   /** Render a finished agent line. */
-  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage }, theme: Theme): string {
+  private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage; limitReason?: "turns" | "context" }, theme: Theme): string {
     const modeLabel = getPromptModeLabel(a.type);
     const duration = formatMs((a.completedAt ?? Date.now()) - a.startedAt);
 
@@ -367,7 +372,7 @@ export class AgentWidget {
       statusText = "";
     } else if (a.status === "steered") {
       icon = theme.fg("warning", "✓");
-      statusText = theme.fg("warning", " (turn limit)");
+      statusText = theme.fg("warning", a.limitReason === "context" ? " (context limit)" : " (turn limit)");
     } else if (a.status === "stopped") {
       icon = theme.fg("dim", "■");
       statusText = theme.fg("dim", " stopped");
@@ -378,7 +383,7 @@ export class AgentWidget {
     } else {
       // aborted
       icon = theme.fg("error", "✗");
-      statusText = theme.fg("warning", " aborted");
+      statusText = theme.fg("warning", a.limitReason === "context" ? " aborted (context limit)" : " aborted");
     }
 
     const parts: string[] = [];

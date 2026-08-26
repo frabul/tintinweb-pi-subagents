@@ -19,7 +19,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Cron } from "croner";
 import { nanoid } from "nanoid";
 import type { AgentManager } from "./agent-manager.js";
-import { normalizeMaxTurns } from "./agent-runner.js";
+import { getDefaultMaxContextLength, normalizeMaxContextLength, normalizeMaxTurns } from "./agent-runner.js";
 import { resolveSpawnType } from "./agent-types.js";
 import { resolveModel } from "./model-resolver.js";
 import type { ScheduleStore } from "./schedule-store.js";
@@ -43,6 +43,7 @@ export interface NewJobInput {
   model?: string;
   thinking?: ThinkingLevel;
   max_turns?: number;
+  max_context_length?: number;
   isolated?: boolean;
   isolation?: IsolationMode;
 }
@@ -106,6 +107,7 @@ export class SubagentScheduler {
       model: input.model,
       thinking: input.thinking,
       max_turns: input.max_turns,
+      max_context_length: input.max_context_length,
       isolated: input.isolated,
       isolation: input.isolation,
       enabled: true,
@@ -254,6 +256,7 @@ export class SubagentScheduler {
         bypassQueue: true,
         model: resolvedModel,
         maxTurns: job.max_turns,
+        maxContextLength: normalizeMaxContextLength(job.max_context_length ?? getDefaultMaxContextLength()),
         isolated: job.isolated,
         thinkingLevel: job.thinking,
         isolation: job.isolation,
@@ -267,6 +270,9 @@ export class SubagentScheduler {
           // Normalized like the Agent tool's own snapshot: `0` means unlimited,
           // and rendering it as "max turns: 0" would read as a limit of none.
           maxTurns: normalizeMaxTurns(job.max_turns),
+          // Explicit value only — the 125k default is not snapped, so a job
+          // without a cap renders no tag.
+          maxContextLength: normalizeMaxContextLength(job.max_context_length),
           isolated: job.isolated,
           runInBackground: true,
           isolation: job.isolation,

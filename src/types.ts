@@ -177,6 +177,12 @@ export interface AgentRecord {
   started: boolean;
   result?: string;
   error?: string;
+  /**
+   * Which limit wrapped up or aborted this run ("turns" or "context"). Unset
+   * when no limit fired, or on records that predate the field. Cleared at
+   * resume, since a resumed run never settles steered/aborted.
+   */
+  limitReason?: "turns" | "context";
   toolUses: number;
   startedAt: number;
   completedAt?: number;
@@ -302,6 +308,12 @@ export interface AgentInvocation {
   /** A caller model spelling retained only by legacy/other invocation paths when needed. */
   requestedModel?: string;
   maxTurns?: number;
+  /**
+   * Explicit context-length cap requested for this run (tokens), normalized —
+   * 0/omitted = unlimited. Explicit values only: the 125k default is not
+   * snapped into the snapshot.
+   */
+  maxContextLength?: number;
   isolated?: boolean;
   inheritContext?: boolean;
   /** Always true for current launches; retained for legacy snapshots. */
@@ -317,6 +329,8 @@ export interface NotificationDetails {
   toolUses: number;
   turnCount: number;
   maxTurns?: number;
+  /** Which limit stopped the run (steered/aborted); unset when none fired. */
+  limitReason?: "turns" | "context";
   totalTokens: number;
   /**
    * Estimated cost in USD, from pi's per-message `usage.cost.total`. Always
@@ -361,6 +375,7 @@ export interface ScheduledSubagent {
   model?: string;
   thinking?: ThinkingLevel;
   max_turns?: number;
+  max_context_length?: number;
   isolated?: boolean;
   isolation?: IsolationMode;
 

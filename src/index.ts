@@ -20,7 +20,7 @@ import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
 import { buildNewAgentFile, disableInContent, enableInContent, findAgentFile, isEmptyStub, locateAgentFile, personalAgentsDir, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
 import { AgentManager, isTopLevelAgent } from "./agent-manager.js";
-import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
+import { getAgentConversation, getDefaultMaxContextLength, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxContextLength, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
 import { inChildSessionContext } from "./child-context.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
@@ -144,11 +144,11 @@ function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /** Human-readable status label for agent completion. */
-function getStatusLabel(status: string, error?: string): string {
+function getStatusLabel(status: string, error?: string, limitReason?: "turns" | "context"): string {
   switch (status) {
     case "error": return `Error: ${error ?? "unknown"}`;
-    case "aborted": return "Aborted (max turns exceeded)";
-    case "steered": return "Wrapped up (turn limit)";
+    case "aborted": return limitReason === "context" ? "Aborted (max context length exceeded)" : "Aborted (max turns exceeded)";
+    case "steered": return limitReason === "context" ? "Wrapped up (context limit)" : "Wrapped up (turn limit)";
     case "stopped": return "Stopped";
     default: return "Done";
   }
@@ -156,7 +156,7 @@ function getStatusLabel(status: string, error?: string): string {
 
 /** Format a structured task notification matching Claude Code's <task-notification> XML. */
 function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showCost = false): string {
-  const status = getStatusLabel(record.status, record.error);
+  const status = getStatusLabel(record.status, record.error, record.limitReason);
   const durationMs = record.completedAt ? record.completedAt - record.startedAt : 0;
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
   const contextPercent = getSessionContextPercent(record.session);
@@ -179,7 +179,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
     record.toolCallId ? `<tool-use-id>${escapeXml(record.toolCallId)}</tool-use-id>` : null,
     record.outputFile ? `<output-file>${escapeXml(record.outputFile)}</output-file>` : null,
     `<status>${escapeXml(status)}</status>`,
-    `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status)}</summary>`,
+    `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status, record.limitReason)}</summary>`,
     `<result>${escapeXml(resultPreview)}</result>`,
     `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}${costXml}<duration_ms>${durationMs}</duration_ms></usage>`,
     `</task-notification>`,
@@ -197,6 +197,7 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
     toolUses: record.toolUses,
     turnCount: activity?.turnCount ?? 0,
     maxTurns: activity?.maxTurns,
+    limitReason: record.limitReason,
     totalTokens,
     // Carried unconditionally; the renderer gates on the setting. Details are
     // data, and a notification rendered before a mid-session toggle should not
@@ -313,8 +314,12 @@ export default function (pi: ExtensionAPI) {
       function renderOne(d: NotificationDetails): string {
         const isError = d.status === "error" || d.status === "stopped" || d.status === "aborted";
         const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-        const statusText = isError ? d.status
-          : d.status === "steered" ? "completed (steered)"
+        // Which limit wrapped up / aborted the run; the parent sees why a
+        // steered or aborted agent stopped ("turn limit" vs "context limit").
+        const reasonTag = d.limitReason === "context" ? " (context limit)" : "";
+        const statusText = d.status === "steered" ? `completed (steered${reasonTag})`
+          : d.status === "aborted" ? `aborted${reasonTag}`
+          : isError ? d.status
           : "completed";
 
         // Line 1: icon + agent description + status
@@ -1604,6 +1609,12 @@ Do directly:
           minimum: 1,
         }),
       ),
+      max_context_length: Type.Optional(
+        Type.Number({
+          description: "Maximum estimated context tokens before wrapping up (measured at turn boundaries). Omit for the default (125k).",
+          minimum: 1,
+        }),
+      ),
       resume: Type.Optional(
         Type.String({
           description: "Optional agent ID to resume from. Continues from previous context and notifies you on completion. An agent can only be resumed once its current run has finished — use steer_subagent to reach one mid-run.",
@@ -1698,7 +1709,7 @@ Do directly:
             }
           }
         } else {
-          const doneText = isSteered ? "Wrapped up (turn limit)" : "Done";
+          const doneText = isSteered ? (details.limitReason === "context" ? "Wrapped up (context limit)" : "Wrapped up (turn limit)") : "Done";
           line += "\n" + theme.fg("dim", `  ⎿  ${doneText}`);
         }
         return new Text(line, 0, 0);
@@ -1725,7 +1736,7 @@ Do directly:
       if (details.status === "error") {
         line += "\n" + theme.fg("error", `  ⎿  Error: ${details.error ?? "unknown"}`);
       } else {
-        line += "\n" + theme.fg("warning", "  ⎿  Aborted (max turns exceeded)");
+        line += "\n" + theme.fg("warning", "  ⎿  " + (details.limitReason === "context" ? "Aborted (max context length exceeded)" : "Aborted (max turns exceeded)"));
       }
 
       return new Text(line, 0, 0);
@@ -1825,6 +1836,7 @@ Do directly:
       // effective values the moment a session reports them.
       const { modelName, modelId } = model ? describeModel(model) : { modelName: undefined, modelId: undefined };
       const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
+      const effectiveMaxContextLength = normalizeMaxContextLength(resolvedConfig.maxContextLength ?? getDefaultMaxContextLength());
       const agentInvocation: AgentInvocation = {
         modelName,
         modelId,
@@ -1836,6 +1848,9 @@ Do directly:
         // Explicit value only — the default fallback would just add noise.
         // Normalize so `0` (unlimited) doesn't surface as a misleading "max turns: 0".
         maxTurns: normalizeMaxTurns(resolvedConfig.maxTurns),
+        // Same explicit-only policy — the 125k default is not snapped into the
+        // snapshot, so a run that inherited it renders no misleading cap.
+        maxContextLength: normalizeMaxContextLength(resolvedConfig.maxContextLength),
         isolated,
         inheritContext,
         runInBackground: true,
@@ -1866,7 +1881,7 @@ Do directly:
        * agent TYPE, not the invocation, so tags taken straight from
        * buildInvocationTags would silently drop `twin`.
        */
-      const detailBaseFor = (rec: AgentRecord | undefined): typeof detailBase => {
+      const detailBaseFor = (rec: AgentRecord | undefined): typeof detailBase & { limitReason?: "turns" | "context" } => {
         if (!rec?.invocation) return detailBase;
         const type = rec.type;
         const { modelName: recModelName, tags } = buildInvocationTags(rec.invocation);
@@ -1878,6 +1893,9 @@ Do directly:
           subagentType: type,
           modelName: recModelName,
           tags: recTags.length > 0 ? recTags : undefined,
+          // Which limit stopped the run; the tool-result card is re-rendered
+          // with the settled record once the agent finishes.
+          limitReason: rec.limitReason,
         };
       };
 
@@ -1910,6 +1928,7 @@ Do directly:
             model: resolvedConfig.modelFromParams ? resolvedConfig.modelInput : undefined,
             thinking: thinking,
             max_turns: effectiveMaxTurns,
+            max_context_length: effectiveMaxContextLength,
             isolated: isolated,
             isolation: isolation,
           });
@@ -1988,6 +2007,7 @@ Do directly:
           name: params.name as string | undefined,
           model,
           maxTurns: effectiveMaxTurns,
+          maxContextLength: effectiveMaxContextLength,
           isolated,
           inheritContext,
           thinkingLevel: thinking,
@@ -2570,7 +2590,7 @@ Do directly:
 
       let output =
         `Agent: ${record.id}\n` +
-        `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status)} | ${statsParts.join(" | ")}\n` +
+        `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status, record.limitReason)} | ${statsParts.join(" | ")}\n` +
         `Description: ${record.description}\n\n`;
 
       if (record.status === "running") {

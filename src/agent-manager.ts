@@ -145,6 +145,8 @@ interface SpawnOptions {
   reclaim?: { handle: string; alias?: string };
   model?: Model<any>;
   maxTurns?: number;
+  /** Explicit context-length cap in estimated tokens; default applies when omitted. */
+  maxContextLength?: number;
   isolated?: boolean;
   inheritContext?: boolean;
   thinkingLevel?: ThinkingLevel;
@@ -655,6 +657,7 @@ export class AgentManager {
       description: options.description,
       model: options.model,
       maxTurns: options.maxTurns,
+      maxContextLength: options.maxContextLength,
       isolated: options.isolated,
       inheritContext: options.inheritContext,
       thinkingLevel: options.thinkingLevel,
@@ -739,7 +742,7 @@ export class AgentManager {
         options.onSessionCreated?.(session);
       },
     })
-      .then(async ({ responseText, session, aborted, steered, failure, structuredJson, structuredRetried }) => {
+      .then(async ({ responseText, session, aborted, steered, failure, structuredJson, structuredRetried, limitReason }) => {
         // Don't overwrite status if externally stopped via abort()
         if (record.status !== "stopped") {
           // Precedence: a hard abort keeps "aborted"; then a failed final turn
@@ -754,6 +757,9 @@ export class AgentManager {
             record.status = steered ? "steered" : "completed";
           }
         }
+        // Which limit (turns/context) steered or aborted the run; the reason-
+        // aware surfaces (status label, status note, widget line) read it.
+        record.limitReason = limitReason;
         record.result = responseText;
         // Kept beside `result`, never inside it: `result` is prose meant for a
         // reader — it is previewed, transcribed, and appended to below — while
@@ -1013,6 +1019,7 @@ export class AgentManager {
       record.resultConsumed = false;
       record.result = undefined;
       record.error = undefined;
+      record.limitReason = undefined;
       record.completedAt = undefined;
       record.status = "queued";
 
@@ -1051,6 +1058,7 @@ export class AgentManager {
     record.completedAt = undefined;
     record.result = undefined;
     record.error = undefined;
+    record.limitReason = undefined;
 
     try {
       const { text, failure } = await resumeAgent(record.session, prompt, {

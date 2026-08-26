@@ -408,6 +408,7 @@ Launch a sub-agent.
 | `model` | string | no | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp interchangeable) with provider fallback |
 | `thinking` | string | no | Thinking level: off, minimal, low, medium, high, xhigh, max (availability depends on pi version and model) |
 | `max_turns` | number | no | Max agentic turns. Omit for unlimited (default) |
+| `max_context_length` | number | no | Max session context (estimated tokens, measured at turn boundaries) before graceful wrap-up. Omit for the 125k default; `0` for unlimited. Overrides the default per call |
 | `resume` | string | no | Agent ID to resume a previous session |
 | `isolated` | boolean | no | No extension/MCP tools |
 | `inherit_context` | boolean | no | Fork parent conversation into agent |
@@ -550,6 +551,14 @@ Instead of hard-aborting at the turn limit, agents get a graceful shutdown:
 1. At `max_turns` — steering message: *"Wrap up immediately — provide your final answer now."*
 2. Up to 5 grace turns to finish cleanly
 3. Hard abort only after the grace period
+
+**Context length is capped the same way.** The session's own context-length estimate is read at turn boundaries, and the two limits steer exactly once: whichever trips first owns the wrap-up, and its grace window is what hard-aborts.
+
+1. At the context limit — default 125k estimated tokens (Agent-tool `max_context_length`, `0` for unlimited) — steering message: *"You have reached your context length limit. Wrap up immediately — provide your final answer now."*
+2. Up to 15k grace context tokens to finish cleanly
+3. Hard abort only after the grace slack
+
+An unmeasured context length (0 — no model context window, or right after a compaction before the next response) skips enforcement until a length is known again, so a cap is never judged against an unknown.
 
 | Status | Meaning | Icon |
 |--------|---------|------|

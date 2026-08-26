@@ -28,7 +28,7 @@ import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
 import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.js";
 import type { SubagentType, ThinkingLevel } from "./types.js";
-import type { LifetimeUsage } from "./usage.js";
+import { getSessionContextLength, type LifetimeUsage } from "./usage.js";
 import type { CompiledSchema } from "./workflow/json-schema.js";
 
 /**
@@ -358,6 +358,39 @@ export function getGraceTurns(): number { return graceTurns; }
 /** Set the grace turns value (minimum 1). */
 export function setGraceTurns(n: number): void { graceTurns = Math.max(1, n); }
 
+/** Default max context length in estimated context tokens. undefined = unlimited (no context cap). */
+let defaultMaxContextLength: number | undefined = 125_000;
+
+/** Normalize a context length limit. undefined or 0 = unlimited, otherwise minimum 1. */
+export function normalizeMaxContextLength(n: number | undefined): number | undefined {
+  if (n == null || n === 0) return undefined;
+  return Math.max(1, n);
+}
+
+/** Get the default max context length value. undefined = unlimited. */
+export function getDefaultMaxContextLength(): number | undefined { return defaultMaxContextLength; }
+/** Set the default max context length value. undefined or 0 = unlimited, otherwise minimum 1. */
+export function setDefaultMaxContextLength(n: number | undefined): void { defaultMaxContextLength = normalizeMaxContextLength(n); }
+
+/**
+ * The context-length cap a run will actually enforce: an explicit value if
+ * the caller supplied one, else the project default. `undefined` = unlimited.
+ *
+ * Enforced at `turn_end` boundaries from the session's own context-length
+ * estimate, mirroring the way `max_turns` is enforced from the turn count.
+ */
+export function resolveEffectiveMaxContextLength(explicit?: number): number | undefined {
+  return normalizeMaxContextLength(explicit ?? defaultMaxContextLength);
+}
+
+/** Additional tokens allowed past the soft context limit before hard abort. */
+let graceContextLength = 15_000;
+
+/** Get the context grace length value. */
+export function getGraceContextLength(): number { return graceContextLength; }
+/** Set the context grace length value (minimum 1). */
+export function setGraceContextLength(n: number): void { graceContextLength = Math.max(1, n); }
+
 /**
  * Try to find the right model for an agent type.
  * Priority: explicit option > config.model > parent model.
@@ -404,6 +437,12 @@ export interface RunOptions {
   description?: string;
   model?: Model<any>;
   maxTurns?: number;
+  /**
+   * Context-length cap for this run, in estimated context tokens (measured at
+   * turn boundaries). Overrides the default; 0/undefined = unlimited per
+   * `resolveEffectiveMaxContextLength`.
+   */
+  maxContextLength?: number;
   signal?: AbortSignal;
   isolated?: boolean;
   inheritContext?: boolean;
@@ -498,10 +537,15 @@ export interface RunOptions {
 export interface RunResult {
   responseText: string;
   session: AgentSession;
-  /** True if the agent was hard-aborted (max_turns + grace exceeded). */
+  /** True if the agent was hard-aborted (a limit's grace period was exceeded). */
   aborted: boolean;
-  /** True if the agent was steered to wrap up (hit soft turn limit) but finished in time. */
+  /** True if the agent was steered to wrap up (hit a soft turn/context limit) but finished in time. */
   steered: boolean;
+  /**
+   * Which limit wrapped up or aborted this run — "turns" or "context".
+   * Undefined when no limit fired (clean completion, provider failure, etc.).
+   */
+  limitReason?: "turns" | "context";
   /**
    * A failure message for the run's FINAL assistant turn, when that turn failed:
    * a provider error (stopReason "error"), or a "length" stop that produced no
@@ -1047,24 +1091,50 @@ export async function runAgent(
 
   options.onSessionCreated?.(session);
 
-  // Track turns for graceful max_turns enforcement
+  // Track turns for graceful max_turns / max_context_length enforcement. Both
+  // soft limits steer exactly once — the first one tripped owns the wrap-up —
+  // and the owning limit's grace window is what hard-aborts.
   let turnCount = 0;
   const maxTurns = resolveEffectiveMaxTurns(type, options.maxTurns);
+  const maxContextLength = resolveEffectiveMaxContextLength(options.maxContextLength);
   let softLimitReached = false;
+  let contextLimitReached = false;
   let aborted = false;
+  let limitReason: "turns" | "context" | undefined;
 
   let currentMessageText = "";
   const unsubTurns = session.subscribe((event: AgentSessionEvent) => {
     if (event.type === "turn_end") {
       turnCount++;
       options.onTurnEnd?.(turnCount);
-      if (maxTurns != null) {
+      if (maxTurns != null && !contextLimitReached) {
         if (!softLimitReached && turnCount >= maxTurns) {
           softLimitReached = true;
+          limitReason ??= "turns";
           session.steer("You have reached your turn limit. Wrap up immediately — provide your final answer now.");
         } else if (softLimitReached && turnCount >= maxTurns + graceTurns) {
           aborted = true;
+          limitReason = "turns";
           session.abort();
+        }
+      }
+      // The context cap is enforced the same way, from the session's own
+      // context-length estimate at turn boundaries. 0 = unknown (no model
+      // window, or right after a compaction before the next response) — a cap
+      // can't be judged against an unmeasured context, so it is skipped until
+      // a length is known again.
+      if (maxContextLength != null && !softLimitReached) {
+        const ctxLen = getSessionContextLength(session);
+        if (ctxLen > 0) {
+          if (!contextLimitReached && ctxLen >= maxContextLength) {
+            contextLimitReached = true;
+            limitReason ??= "context";
+            session.steer("You have reached your context length limit. Wrap up immediately — provide your final answer now.");
+          } else if (contextLimitReached && ctxLen >= maxContextLength + graceContextLength) {
+            aborted = true;
+            limitReason = "context";
+            session.abort();
+          }
         }
       }
     }
@@ -1144,7 +1214,8 @@ export async function runAgent(
     responseText,
     session,
     aborted,
-    steered: softLimitReached,
+    steered: softLimitReached || contextLimitReached,
+    limitReason,
     failure: finalTurnError(session, startLen) ?? structuredFailure,
     ...(structuredCapture?.json !== undefined ? { structuredJson: structuredCapture.json } : {}),
     ...(structuredRetried ? { structuredRetried } : {}),
