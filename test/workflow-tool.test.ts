@@ -109,10 +109,11 @@ describe("createWorkflowHost — spawn mapping", () => {
 
     const result = await host.spawnAgent(request({ label: "review:bugs" }));
 
-    expect(result).toMatchObject({ ok: true, text: "the answer", tokens: 125, toolCalls: 3 });
-    // `tokens` is the lifetime total (100 + 20 + 5); `outputTokens` feeds the
-    // script's `budget.spent()` and must be output alone, as Claude Code's
-    // budget is. Billing a fan-out's re-sent input would swamp it.
+    expect(result).toMatchObject({ ok: true, text: "the answer", tokens: 165, toolCalls: 3 });
+    // `tokens` is the weighted lifetime display score (100 + 3 × 20 + 5);
+    // `outputTokens` feeds the script's `budget.spent()` and must be output
+    // alone, as Claude Code's budget is. Billing a fan-out's re-sent input
+    // would swamp it.
     expect(result.outputTokens).toBe(20);
     const [, , type, prompt, options] = stub.spawnAndWait.mock.calls[0];
     expect(type).toBe("general-purpose");
