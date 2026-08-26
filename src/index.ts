@@ -816,6 +816,10 @@ export default function (pi: ExtensionAPI) {
   // bound session_start, so a filtered-out activation never advertises (#142).
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    // A switched session may run a different model — drop the stale parent
+    // snapshot and let the first execute / model_select re-warm it.
+    parentModelId = undefined;
+    parentThinking = undefined;
     if (ctx.hasUI) {
       widget.setUICtx(ctx.ui);
       fleet.setUICtx(ctx.ui as any);
@@ -1148,6 +1152,21 @@ export default function (pi: ExtensionAPI) {
     // pi awaits this handler, and the process exits right after — unawaited, those
     // handlers would never run. Internally bounded, so a hung one can't strand quit.
     await manager.dispose(pi);
+  });
+
+  // Parent model + thinking level, cached for the Agent tool's invocation line.
+  // renderCall cannot reach the tool-execution ctx, so the model an override-free
+  // spawn inherits is tracked here: `model_select` fires on /model changes and
+  // every Agent-tool execute refreshes the pair from its own ctx (authoritative).
+  // Empty until the first signal — the first render of the first call shows
+  // `inherit` until pi re-renders the row with warmed state.
+  let parentModelId: string | undefined;
+  let parentThinking: string | undefined;
+  pi.on("model_select", ({ model }) => {
+    parentModelId = model ? `${model.provider}/${model.id}` : undefined;
+  });
+  pi.on("thinking_level_select", ({ level }) => {
+    parentThinking = level;
   });
 
   // Live widget: show running agents above editor. `widgetMode` keeps the
@@ -1675,7 +1694,36 @@ Do directly:
         restoreBackground: rowBackground,
         bold: true,
       });
-      return new Text(rowBackground + "▸ " + name + (desc ? "  " + theme.fg("muted", desc) : ""), 0, 0);
+      const header = rowBackground + "▸ " + name + (desc ? "  " + theme.fg("muted", desc) : "");
+      // No type (misspelled, unregistered, or a legacy call): there is no config
+      // to resolve against, so keep the compact header-only line.
+      if (!args.subagent_type) return new Text(header, 0, 0);
+      const lines = [header];
+      const detail = (label: string, value: string | number | boolean) =>
+        theme.fg("dim", `  ⎿  ${label}: ${value}`);
+      // Resolved model + thinking with execute's precedence: caller param →
+      // agent frontmatter → parent session. The parent is cached (`inherit`
+      // until the first signal) because renderCall has no access to the
+      // tool-execution ctx; execute and model_select keep it fresh.
+      const rc = resolveAgentInvocationConfig(getAgentConfig(args.subagent_type), args);
+      const resolvedModel = rc.modelInput ?? parentModelId ?? "inherit";
+      const resolvedThinking = rc.thinking ?? parentThinking ?? "inherit";
+      lines.push(detail("subagent_type", args.subagent_type));
+      const nameParam = args.name?.trim();
+      if (nameParam) lines.push(detail("name", nameParam));
+      lines.push(detail("model", resolvedModel));
+      lines.push(detail("thinking", resolvedThinking));
+      // The remaining parameters are shown only when the caller actually passed
+      // them (blank strings count as omitted, matching resolveAgentInvocationConfig).
+      if (args.max_turns !== undefined) lines.push(detail("max_turns", args.max_turns));
+      if (args.max_context_length !== undefined) lines.push(detail("max_context_length", args.max_context_length));
+      const resume = args.resume?.trim();
+      if (resume) lines.push(detail("resume", resume));
+      if (args.isolated !== undefined) lines.push(detail("isolated", args.isolated));
+      if (args.inherit_context !== undefined) lines.push(detail("inherit_context", args.inherit_context));
+      const schedule = typeof args.schedule === "string" ? args.schedule.trim() : undefined;
+      if (schedule) lines.push(detail("schedule", schedule));
+      return new Text(lines.join("\n"), 0, 0);
     },
 
     renderResult(result, { expanded }, theme, renderContext) {
@@ -1705,9 +1753,15 @@ Do directly:
         return parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(" " + theme.fg("dim", "·") + " ");
       };
 
+      // Sub-line showing the canonical provider/modelId the run used. Always
+      // included (when known) so the chat confirms resolution, not just when
+      // it differs from the parent.
+      const resolvedModelLine = (d: AgentDetails): string =>
+        d.resolvedModel ? "\n" + theme.fg("dim", `  ⎿  model: ${d.resolvedModel}`) : "";
+
       // ---- Background agent launched ----
       if (details.status === "background") {
-        return new Text(theme.fg("dim", `  ⎿  Running in background (ID: ${details.agentId})`), 0, 0);
+        return new Text(theme.fg("dim", `  ⎿  Running in background (ID: ${details.agentId})`) + resolvedModelLine(details), 0, 0);
       }
 
       // ---- Completed / Steered ----
@@ -1718,6 +1772,7 @@ Do directly:
         const s = stats(details);
         let line = icon + (s ? " " + s : "");
         line += " " + theme.fg("dim", "·") + " " + theme.fg("dim", duration);
+        line += resolvedModelLine(details);
 
         if (expanded) {
           const resultText = result.content[0]?.type === "text" ? result.content[0].text : "";
@@ -1742,6 +1797,7 @@ Do directly:
         const s = stats(details);
         let line = theme.fg("dim", "■") + (s ? " " + s : "");
         line += "\n" + theme.fg("dim", "  ⎿  Stopped");
+        line += resolvedModelLine(details);
         return new Text(line, 0, 0);
       }
 
@@ -1754,6 +1810,7 @@ Do directly:
       // ---- Error / Aborted (hard max_turns) ----
       const s = stats(details);
       let line = theme.fg("error", "✗") + (s ? " " + s : "");
+      line += resolvedModelLine(details);
 
       if (details.status === "error") {
         line += "\n" + theme.fg("error", `  ⎿  Error: ${details.error ?? "unknown"}`);
@@ -1811,6 +1868,11 @@ Do directly:
       // default when the caller omits it. A non-empty caller model is always
       // treated as explicit so an unknown value fails loudly below.
       let model = ctx.model;
+      // Authoritative refresh of the parent snapshot for renderCall: this call
+      // is the parent's own turn, so its model/thinking are what an
+      // override-free sibling would inherit.
+      parentModelId = model ? `${model.provider}/${model.id}` : parentModelId;
+      if (ctx.thinkingLevel) parentThinking = ctx.thinkingLevel;
       if (resolvedConfig.modelInput) {
         const resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
         if (typeof resolved === "string") {
@@ -1887,6 +1949,7 @@ Do directly:
         description: params.description,
         subagentType,
         modelName,
+        resolvedModel: modelId,
         tags: agentTags.length > 0 ? agentTags : undefined,
       };
 
@@ -1914,6 +1977,7 @@ Do directly:
           description: rec.description,
           subagentType: type,
           modelName: recModelName,
+          resolvedModel: rec.invocation.modelId,
           tags: recTags.length > 0 ? recTags : undefined,
           // Which limit stopped the run; the tool-result card is re-rendered
           // with the settled record once the agent finishes.
