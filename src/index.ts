@@ -2487,17 +2487,12 @@ Terse command-style prompts produce shallow, generic work.
     name: SUBAGENT_TOOL_NAMES.GET_RESULT,
     label: "Get Agent Result",
     description:
-      "Check status and retrieve a background agent's full result — its completion notification carries only a preview. Use the agent ID returned by Agent.",
+      "Check status and retrieve a background agent's full result — its completion notification carries only a preview. Use the agent ID returned by Agent. Do not use this to poll for results — you will be notified when the agent completes.",
     promptSnippet: "Check status and retrieve results from a background agent",
     parameters: Type.Object({
       agent_id: Type.String({
         description: "The agent ID to check. The agent's handle also works — its `name` if you gave it one, otherwise its type (`explore`, `explore-2`).",
       }),
-      wait: Type.Optional(
-        Type.Boolean({
-          description: "If true, wait for the agent to complete before returning. Default: false.",
-        }),
-      ),
       verbose: Type.Optional(
         Type.Boolean({
           description: "If true, include the agent's full conversation (messages + tool calls). Default: false.",
@@ -2515,7 +2510,9 @@ Terse command-style prompts produce shallow, generic work.
       // completion notification can still be delivered.
       // Queued agents have no promise yet (it's created when the queue starts
       // them), so poll until they leave the queue, then await like a running one.
-      if (params.wait && (record.status === "running" || record.status === "queued")) {
+      // Legacy internal callers may still pass `wait`; the schema no longer
+      // exposes it, so agents cannot request waiting.
+      if ((params as { wait?: boolean }).wait && (record.status === "running" || record.status === "queued")) {
         while (record.status === "queued") {
           await abortable(
             new Promise<void>((resolve) => setTimeout(resolve, QUEUE_WAIT_POLL_MS)),
@@ -2545,7 +2542,7 @@ Terse command-style prompts produce shallow, generic work.
         `Description: ${record.description}\n\n`;
 
       if (record.status === "running") {
-        output += "Agent is still running. Use wait: true or check back later.";
+        output += "Agent is still running. Do not use this to poll for results — you will be notified when the agent completes.";
       } else if (record.status === "error") {
         output += `Error: ${record.error}${partialOutputSuffix(record)}`;
       } else {
