@@ -69,7 +69,7 @@ export interface AgentConfig {
   promptMode: "replace" | "append";
   /** Default for spawn: fork parent conversation. undefined = caller decides. */
   inheritContext?: boolean;
-  /** Default for spawn: run in background. undefined = caller decides. */
+  /** Legacy execution field; launches are always detached regardless of its value. */
   runInBackground?: boolean;
   /** Default for spawn: no extension tools. undefined = caller decides. */
   isolated?: boolean;
@@ -94,10 +94,9 @@ export type JoinMode = 'async' | 'group' | 'smart';
 
 /**
  * Display mode for the persistent above-editor agent widget.
- * - `all`: show every agent (foreground + background).
- * - `background`: hide foreground agents (they already render inline as the
- *   Agent tool result, #118); show background/queued/scheduled/RPC.
+ * - `all` and `background`: show agent rows.
  * - `off`: hide the widget entirely.
+ * `background` remains as a compatibility spelling; all spawns are detached.
  */
 export type WidgetMode = 'all' | 'background' | 'off';
 
@@ -181,14 +180,6 @@ export interface AgentRecord {
   abortController?: AbortController;
   promise?: Promise<string>;
   /**
-   * A caller is awaiting this agent inline (`spawnAndWait`) — what
-   * `maxConcurrentForeground` bounds. Distinct from `isBackground === false`,
-   * which says only that the agent has an inline result surface: a detached
-   * cross-extension RPC spawn is foreground by that measure and yet blocks
-   * nobody, so it takes no slot.
-   */
-  blocking?: boolean;
-  /**
    * Present only while the record is "queued": resolves when it leaves the
    * queue, started or aborted. `spawnAndWait` waits on this because a queued
    * record has no `promise` yet. Always resolves, never rejects — a rejection
@@ -228,14 +219,9 @@ export interface AgentRecord {
   /** Number of times this agent's session has compacted. Initialized to 0 at spawn. */
   compactionCount: number;
   /**
-   * Whether this agent was spawned to run in the background. Tri-state, set at
-   * spawn from `SpawnOptions.isBackground`: `true` = background, `false` =
-   * foreground (has an inline Agent tool-result surface), `undefined` = the
-   * caller never declared it (e.g. a cross-extension RPC spawn, which is detached
-   * and has no inline surface). The widget's background-only filter keys off this
-   * — and excludes only explicit `false`, so `undefined` agents stay visible.
-   * Reliable across ALL spawn paths, unlike the UI-only `invocation` snapshot,
-   * which only the Agent-tool path populates.
+   * Whether this agent was spawned to run in the background. All current spawn
+   * paths set this to `true`; the optional shape is retained for records loaded
+   * from older integrations.
    */
   isBackground?: boolean;
   /** Resolved spawn params, captured for UI display. Fixed at spawn time. */
@@ -300,6 +286,7 @@ export interface AgentInvocation {
   maxTurns?: number;
   isolated?: boolean;
   inheritContext?: boolean;
+  /** Always true for current launches; retained for legacy snapshots. */
   runInBackground?: boolean;
   isolation?: IsolationMode;
 }

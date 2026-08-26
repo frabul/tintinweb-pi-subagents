@@ -146,9 +146,9 @@ describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
     );
   });
 
-  it("carries the fallback note on the background branch too", async () => {
-    // Previously the note was computed after spawnAndWait returned, so only a
-    // foreground caller ever saw it (#183).
+  it("carries the fallback note on the detached branch too", async () => {
+    // The fallback note is computed before the spawn, so the detached handoff
+    // still tells the model which configured agent actually ran (#183).
     const { tools } = boot();
     vi.mocked(runAgent).mockReturnValue(new Promise(() => {}) as any);
 
@@ -218,7 +218,7 @@ describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
     });
     const spawned = await tools.get("Agent").execute(
       "tc-6",
-      { prompt: "start", description: "live agent", subagent_type: "scout", run_in_background: false },
+      { prompt: "start", description: "live agent", subagent_type: "scout" },
       undefined, undefined, ctx(),
     );
     const id = /Agent ID: (\S+)/.exec(textOf(spawned))?.[1]

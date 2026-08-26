@@ -35,7 +35,7 @@ import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, ses
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
-import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
+import { getStatusNote, partialOutputSuffix } from "./status-note.js";
 import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
 import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
 import {
@@ -43,7 +43,6 @@ import {
   type AgentDetails,
   AgentWidget,
   buildInvocationTags,
-  describeActivity,
   fgPreservingNestedStyles,
   formatCost,
   formatDuration,
@@ -52,8 +51,6 @@ import {
   formatTurns,
   getDisplayName,
   getPromptModeLabel,
-  SPINNER,
-  type Theme,
   type UICtx,
 } from "./ui/agent-widget.js";
 import { FleetList, type FleetUICtx, type FleetWorkflow } from "./ui/fleet-list.js";
@@ -82,18 +79,6 @@ function textResult(msg: string, details?: AgentDetails) {
   return { content: [{ type: "text" as const, text: msg }], details: details as any };
 }
 
-export function renderRunningAgentStatus(
-  frame: string,
-  statsText: string,
-  activity: string,
-  theme: Pick<Theme, "fg">,
-): Container {
-  const container = new Container();
-  container.addChild(new Text(theme.fg("accent", frame) + (statsText ? " " + statsText : ""), 0, 0));
-  container.addChild(new Text(theme.fg("dim", `  ⎿  ${activity}`), 0, 0));
-  return container;
-}
-
 /** Format an agent's lifetime token total, or "" when zero. */
 function formatLifetimeTokens(o: { lifetimeUsage: LifetimeUsage }): string {
   const t = getLifetimeTotal(o.lifetimeUsage);
@@ -102,7 +87,7 @@ function formatLifetimeTokens(o: { lifetimeUsage: LifetimeUsage }): string {
 
 /**
  * Create an AgentActivity state and spawn callbacks for tracking tool usage.
- * Used by both foreground and background paths to avoid duplication.
+ * Used by the Agent tool and programmatic spawn paths to avoid duplication.
  */
 function createActivityTracker(maxTurns?: number, onStreamUpdate?: () => void) {
   const state: AgentActivity = {
@@ -197,31 +182,6 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
     `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}${costXml}<duration_ms>${durationMs}</duration_ms></usage>`,
     `</task-notification>`,
   ].filter(Boolean).join('\n');
-}
-
-/** Build AgentDetails from a base + record-specific fields. */
-function buildDetails(
-  base: Pick<AgentDetails, "displayName" | "description" | "subagentType" | "modelName" | "tags">,
-  record: { toolUses: number; startedAt: number; completedAt?: number; status: string; error?: string; id?: string; session?: any; lifetimeUsage: LifetimeUsage },
-  activity?: AgentActivity,
-  overrides?: Partial<AgentDetails>,
-): AgentDetails {
-  return {
-    ...base,
-    toolUses: record.toolUses,
-    tokens: formatLifetimeTokens(record),
-    // Raw, and unconditional: `tokens` is preformatted because it is one stat,
-    // but a cost is joined by "·" in one surface, "," in another and "|" in a
-    // third — so it travels as a number and each renderer punctuates its own.
-    cost: getLifetimeCost(record.lifetimeUsage),
-    turnCount: activity?.turnCount,
-    maxTurns: activity?.maxTurns,
-    durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
-    status: record.status as AgentDetails["status"],
-    agentId: record.id,
-    error: record.error,
-    ...overrides,
-  };
 }
 
 /** Build notification details for the custom message renderer. */
@@ -715,9 +675,11 @@ export default function (pi: ExtensionAPI) {
     // agent's name and make `@handle` ambiguous. Same rule: dispatcher only.
     delete safeOptions.reclaim;
     // Every spawn through here is DETACHED — the caller gets an id back and
-    // awaits nothing. A forged `blocking` would charge it to the foreground
-    // pool and could defer it behind a queue whose gate nobody is holding.
+    // awaits nothing. A legacy `blocking` value cannot alter that contract,
+    // and forcing the manager flag keeps RPC and registry callers on the same
+    // background queue as the Agent tool.
     delete safeOptions.blocking;
+    safeOptions.isBackground = true;
     return spawnResolved(piRef, ctxRef, type, prompt, safeOptions);
   };
 
@@ -1122,11 +1084,9 @@ export default function (pi: ExtensionAPI) {
     await manager.dispose(pi);
   });
 
-  // Live widget: show running agents above editor.
-  // widgetMode (default "background") selects what the widget shows: "all" =
-  // every agent; "background" = hide foreground (they already render inline as
-  // the Agent tool result, so showing them here too is a duplicate, #118), keep
-  // everything else; "off" = hide the widget entirely. Read live at render time.
+  // Live widget: show running agents above editor. `widgetMode` keeps the
+  // historical "all"/"background" values and supports "off" to hide it. Since
+  // every spawn is detached, the two visible modes show the same agent rows.
   let widgetMode: WidgetMode = "background";
   function getWidgetMode(): WidgetMode { return widgetMode; }
   const widget = new AgentWidget(manager, agentActivity, getWidgetMode, isShowCostEnabled, isShowModelEnabled);
@@ -1162,13 +1122,6 @@ export default function (pi: ExtensionAPI) {
   let defaultJoinMode: JoinMode = 'smart';
   function getDefaultJoinMode(): JoinMode { return defaultJoinMode; }
   function setDefaultJoinMode(mode: JoinMode) { defaultJoinMode = mode; }
-
-  // What an unqualified top-level spawn means. Defaults to background,
-  // following Claude Code; `backgroundByDefault: false` restores the previous
-  // foreground default. Nested spawns ignore this — see nested-tools.ts.
-  let backgroundByDefault = true;
-  function getBackgroundByDefault(): boolean { return backgroundByDefault; }
-  function setBackgroundByDefault(b: boolean) { backgroundByDefault = b; }
 
   // Master switch for the schedule subagent feature. Defaults to enabled.
   // Read once at extension init (before tool registration) so the Agent tool's
@@ -1268,10 +1221,10 @@ export default function (pi: ExtensionAPI) {
    * re-running agent needs: transcript anchoring, activity tracking, join-mode
    * batching, the widget/fleet refresh, and the `subagents:created` event.
    *
-   * Shared by the Agent tool's `resume` + `run_in_background` branch and the
-   * `@handle message` prompt mention — they differ only in how they report the
-   * outcome. Returns the record, or undefined when the manager refused because
-   * the agent is still running (see AgentManager.resume).
+   * Shared by the Agent tool's `resume` path and the `@handle message` prompt
+   * mention — they differ only in how they report the outcome. Returns the
+   * record, or undefined when the manager refused because the agent is still
+   * running (see AgentManager.resume).
    *
    * Callers must have already established that the record has a session.
    */
@@ -1282,7 +1235,7 @@ export default function (pi: ExtensionAPI) {
     opts: { outputTranscript: boolean; maxTurns?: number; toolCallId?: string },
   ): Promise<AgentRecord | undefined> {
     const id = existing.id;
-    const joinMode = resolveJoinMode(defaultJoinMode, true);
+    const joinMode = resolveJoinMode(defaultJoinMode);
     // Assigned unconditionally: the completion notification carries this as
     // `<tool-use-id>`, so a mention-resume (which passes none) has to CLEAR the
     // id left by the spawn that created the record. Keeping it would point the
@@ -1308,8 +1261,8 @@ export default function (pi: ExtensionAPI) {
 
     // No `signal`: a background spawn deliberately omits it, and a detached
     // resume must behave the same. Passing it would abort this agent when
-    // the parent turn is interrupted (user Esc), while agents started with
-    // run_in_background in that same turn keep going.
+    // the parent turn is interrupted (user Esc), while detached agents started
+    // in that same turn keep going.
     const record = await manager.resume(id, prompt, undefined, {
       isBackground: true,
       onToolActivity: bgCallbacks.onToolActivity,
@@ -1403,11 +1356,9 @@ export default function (pi: ExtensionAPI) {
   applyAndEmitLoaded(
     {
       setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
-      setMaxConcurrentForeground: (n) => manager.setMaxConcurrentForeground(n),
       setDefaultMaxTurns,
       setGraceTurns,
       setDefaultJoinMode,
-      setBackgroundByDefault,
       setSchedulingEnabled,
       setScopeModels: setScopeModelsEnabled,
       setStrictAgentFiles: (b) => { strictAgentFiles = b; },
@@ -1443,7 +1394,7 @@ export default function (pi: ExtensionAPI) {
         description:
           'Opt-in only — fire later instead of now. Omit to run immediately (the default, almost always correct). ' +
           'Formats: 6-field cron ("0 0 9 * * 1" = 9am Mon), interval ("5m"/"1h"), one-shot ("+10m" or ISO). ' +
-          'Forces run_in_background; incompatible with inherit_context and resume. Returns job ID.',
+          'Runs in the background; incompatible with inherit_context and resume. Returns job ID.',
       }),
     ),
   };
@@ -1480,7 +1431,7 @@ Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.
 Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
 - Parallel work: one message, multiple Agent calls — they run concurrently.
-- Subagents run in the background by default; you'll be notified when one completes. Pass run_in_background: false only when your very next action depends on the result and nothing else could usefully happen while it runs. Never fabricate or predict a pending agent's results — if the user asks before the notification arrives, say it's still running.
+- Subagents always run in the background; you'll be notified when one completes. Never fabricate or predict a pending agent's results — if the user asks before the notification arrives, say it's still running.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
 - resume continues a previous agent by ID; steer_subagent messages a running one.${isolationCompactGuideline}`;
 
@@ -1503,8 +1454,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - When you launch multiple agents for independent work, send them in a single message with multiple tool uses so they run concurrently. If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple Agent tool use content blocks.
 - When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
 - Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting the work as done.
-- Agents run in the background by default. When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
-- **Foreground vs background**: Pass \`run_in_background: false\` only when your very next action depends on the agent's result and nothing else could usefully happen while it runs — e.g., a research agent whose finding gates the edit you're about to make. Otherwise let it run in the background (the default) — this includes fire-and-forget work, independent investigations, and anything where the user might hand you something else in the meantime. Wanting the result "next" is not enough on its own.
+- Agents always run in the background and you will be automatically notified when one completes — do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
 - **Don't race**: after launching a background agent, you know nothing about its results. Never fabricate or predict them in any format — not as prose, summary, or structured output. The completion notification arrives in a later turn; it is never something you write yourself. If the user asks before it lands, say the agent is still running — give status, not a guess.
 - Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
 - Use steer_subagent to send mid-run messages to a running background agent.
@@ -1586,7 +1536,7 @@ Terse command-style prompts produce shallow, generic work.
     promptGuidelines: [
       "Use Agent with specialized agents when the task matches an agent type's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing — if you delegate research to a subagent, do not also perform the same searches yourself.",
       "For broad codebase exploration or research, spawn Agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.",
-      "When an agent runs in the background, you will be notified on completion — do not poll or sleep waiting for it. Continue with other work instead.",
+      "Agents always run in the background and you will be notified on completion — do not poll or sleep waiting for them. Continue with other work instead.",
       "Trust but verify: an agent's summary describes intent, not outcome. When an agent writes or edits code, check the actual changes before reporting work as done.",
     ],
     parameters: Type.Object({
@@ -1622,14 +1572,9 @@ Terse command-style prompts produce shallow, generic work.
           minimum: 1,
         }),
       ),
-      run_in_background: Type.Optional(
-        Type.Boolean({
-          description: "Defaults to true — the agent runs detached, returning its ID immediately, and you are notified on completion. Set false only when your very next action depends on the result; the call then blocks and returns the agent's full output inline.",
-        }),
-      ),
       resume: Type.Optional(
         Type.String({
-          description: "Optional agent ID to resume from. Continues from previous context. Resumes detached like any other spawn; pass run_in_background: false to block and get the result inline. An agent can only be resumed once its current run has finished — use steer_subagent to reach one mid-run.",
+          description: "Optional agent ID to resume from. Continues from previous context and notifies you on completion. An agent can only be resumed once its current run has finished — use steer_subagent to reach one mid-run.",
         }),
       ),
       isolated: Type.Optional(
@@ -1669,7 +1614,7 @@ Terse command-style prompts produce shallow, generic work.
       return new Text(rowBackground + "▸ " + name + (desc ? "  " + theme.fg("muted", desc) : ""), 0, 0);
     },
 
-    renderResult(result, { expanded, isPartial }, theme, renderContext) {
+    renderResult(result, { expanded }, theme, renderContext) {
       const details = result.details as AgentDetails | undefined;
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
       // Pi reports pre-execution failures (extension block, abort, argument
@@ -1695,13 +1640,6 @@ Terse command-style prompts produce shallow, generic work.
         }
         return parts.map(p => fgPreservingNestedStyles(theme, "dim", p)).join(" " + theme.fg("dim", "·") + " ");
       };
-
-      // ---- While running (streaming) ----
-      if (isPartial || details.status === "running") {
-        const frame = SPINNER[details.spinnerFrame ?? 0];
-        const s = stats(details);
-        return renderRunningAgentStatus(frame, s, details.activity ?? "thinking…", theme);
-      }
 
       // ---- Background agent launched ----
       if (details.status === "background") {
@@ -1764,7 +1702,7 @@ Terse command-style prompts produce shallow, generic work.
 
     // ---- Execute ----
 
-    execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+    execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
       // Ensure we have UI context for widget rendering
       widget.setUICtx(ctx.ui as UICtx);
 
@@ -1789,10 +1727,9 @@ Terse command-style prompts produce shallow, generic work.
       // once persisted an empty type into a scheduled job.
       const requestedType = (dispatch.ok && dispatch.fellBackFrom) || subagentType;
       // Computed at resolution rather than after the run, so the background and
-      // schedule branches carry it too — previously it existed only on the
-      // foreground path. Resume deliberately doesn't: it replays the stored
-      // session and ignores `subagent_type` entirely, so a note about type
-      // substitution would be describing something that didn't happen.
+      // schedule branches carry it too. Resume deliberately doesn't: it
+      // replays the stored session and ignores `subagent_type` entirely, so a
+      // note about type substitution would be describing something that didn't happen.
       const fallbackNote = dispatch.ok && dispatch.fellBackFrom !== undefined
         ? `Note: Unknown agent type "${dispatch.fellBackFrom}" — using ${resolveType(subagentType) ? subagentType : "the fallback agent config"}.\n\n`
         : "";
@@ -1804,7 +1741,6 @@ Terse command-style prompts produce shallow, generic work.
 
       const resolvedConfig = resolveAgentInvocationConfig(customConfig, params, {
         worktreeAllowed: isWorktreeIsolationEnabled(),
-        defaultRunInBackground: getBackgroundByDefault(),
       });
 
       // Resolve model from agent config first; tool-call params only fill gaps.
@@ -1835,7 +1771,6 @@ Terse command-style prompts produce shallow, generic work.
 
       const thinking = resolvedConfig.thinking;
       const inheritContext = resolvedConfig.inheritContext;
-      const runInBackground = resolvedConfig.runInBackground;
       const isolated = resolvedConfig.isolated;
       const isolation = resolvedConfig.isolation;
       // Whether this spawn writes its .output transcript. Per-agent
@@ -1881,7 +1816,7 @@ Terse command-style prompts produce shallow, generic work.
         maxTurns: normalizeMaxTurns(resolvedConfig.maxTurns),
         isolated,
         inheritContext,
-        runInBackground,
+        runInBackground: true,
         isolation,
       };
       // Tool-result render shows the mode label too; viewer's header already does.
@@ -1935,9 +1870,6 @@ Terse command-style prompts produce shallow, generic work.
         if (params.inherit_context) {
           return textResult("Cannot combine `schedule` with `inherit_context` — there is no parent conversation at fire time.");
         }
-        if (params.run_in_background === false) {
-          return textResult("Cannot combine `schedule` with `run_in_background: false` — scheduled jobs always run in background.");
-        }
         if (!scheduler.isActive()) {
           return textResult("Scheduler is not active in this session yet. Try again after the session has fully started.");
         }
@@ -1967,7 +1899,8 @@ Terse command-style prompts produce shallow, generic work.
         }
       }
 
-      // Resume existing agent
+      // Resume existing agent. Resumes are detached like fresh spawns and notify
+      // the parent when the resumed turn completes.
       if (params.resume) {
         const existing = manager.getRecord(params.resume);
         if (!existing || !isTopLevelAgent(existing)) {
@@ -1976,65 +1909,38 @@ Terse command-style prompts produce shallow, generic work.
         if (!existing.session) {
           return textResult(`Agent "${params.resume}" has no active session to resume.`);
         }
-
-        // Background resume: detached run that notifies on completion, mirroring
-        // a background spawn. Previously run_in_background was silently ignored
-        // on resume (this branch returned before the background branch below),
-        // so a resumed agent always blocked the main loop until it finished.
-        if (runInBackground) {
-          const id = existing.id;
-          // A detached resume hands control back while the record stays
-          // "running", so nothing stops the model from resuming the same agent
-          // again mid-run. manager.resume() refuses that (it would orphan the
-          // live run's abort controller); say why here, where the model can act
-          // on it, instead of letting it read as a generic failure.
-          if (existing.status === "running" || existing.status === "queued") {
-            return textResult(
-              `Agent "${params.resume}" is still ${existing.status} — it can only be resumed once its current run finishes.\n` +
-              `Use steer_subagent to send it a message mid-run, or get_subagent_result to wait for it.`,
-            );
-          }
-
-          const record = await startBackgroundResume(ctx, existing, params.prompt, {
-            outputTranscript,
-            maxTurns: effectiveMaxTurns,
-            toolCallId,
-          });
-          if (!record) {
-            return textResult(`Failed to resume agent "${params.resume}".`);
-          }
-
-          const isQueued = record.status === "queued";
+        const id = existing.id;
+        // A detached resume hands control back while the record stays
+        // "running", so a second resume is refused until this one finishes.
+        if (existing.status === "running" || existing.status === "queued") {
           return textResult(
-            `Agent ${isQueued ? "queued" : "resumed"} in background.\n` +
-            `Agent ID: ${id}\n` +
-            `Type: ${existing.type}\n` +
-            (record.outputFile ? `Output file: ${record.outputFile}\n` : "") +
-            (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
-            `\nYou will be notified when this agent completes.\n` +
-            `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.`,
-            { ...detailBaseFor(record), toolUses: record.toolUses, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
+            `Agent "${params.resume}" is still ${existing.status} — it can only be resumed once its current run finishes.\n` +
+            "Use steer_subagent to send it a message mid-run, or check its completion notification.",
           );
         }
-
-        const record = await manager.resume(params.resume, params.prompt, signal);
+        const record = await startBackgroundResume(ctx, existing, params.prompt, {
+          outputTranscript,
+          maxTurns: effectiveMaxTurns,
+          toolCallId,
+        });
         if (!record) {
           return textResult(`Failed to resume agent "${params.resume}".`);
         }
-        // A failed resume surfaces the error, plus any partial output THIS
-        // resume produced (never the previous turn's answer, #144).
-        if (record.status === "error") {
-          return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBaseFor(record), record));
-        }
+        const isQueued = record.status === "queued";
         return textResult(
-          record.result?.trim() || "No output.",
-          buildDetails(detailBaseFor(record), record),
+          `Agent ${isQueued ? "queued" : "resumed"} in background.\n` +
+          `Agent ID: ${id}\n` +
+          `Type: ${existing.type}\n` +
+          (record.outputFile ? `Output file: ${record.outputFile}\n` : "") +
+          (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
+          "\nYou will be notified when this agent completes.\n" +
+          "Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.",
+          { ...detailBaseFor(record), toolUses: record.toolUses, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
         );
       }
 
       // Background execution
-      if (runInBackground) {
-        const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(effectiveMaxTurns);
+      const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(effectiveMaxTurns);
 
         // Wrap onSessionCreated to wire output file streaming.
         // The callback lazily reads record.outputFile (set right after spawn)
@@ -2069,7 +1975,7 @@ Terse command-style prompts produce shallow, generic work.
 
         // Set output file + join mode synchronously after spawn, before the
         // event loop yields — onSessionCreated is async so this is safe.
-        const joinMode = resolveJoinMode(defaultJoinMode, true);
+        const joinMode = resolveJoinMode(defaultJoinMode);
         const record = manager.getRecord(id);
         if (record && joinMode) {
           record.joinMode = joinMode;
@@ -2083,9 +1989,7 @@ Terse command-style prompts produce shallow, generic work.
         // call instead of being reported as a subagent that ran (#179).
         await manager.awaitStartup(id);
 
-        if (joinMode == null || joinMode === 'async') {
-          // Foreground/no join mode or explicit async — not part of any batch
-        } else {
+        if (joinMode !== "async") {
           // smart or group — add to current batch
           currentBatchAgents.push({ id, joinMode });
           // Debounce: reset timer on each new agent so parallel tool calls
@@ -2121,151 +2025,7 @@ Terse command-style prompts produce shallow, generic work.
           `Do not duplicate this agent's work.`,
           { ...detailBaseFor(record), toolUses: 0, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
         );
-      }
-
-      // Foreground (synchronous) execution — stream progress via onUpdate
-      let spinnerFrame = 0;
-      const startedAt = Date.now();
-      let fgId: string | undefined;
-      // Set only while the spawn is parked on a foreground concurrency slot
-      // (maxConcurrentForeground); undefined the rest of the time, including
-      // always when the limit is unset.
-      let queuedAhead: number | undefined;
-
-      const streamUpdate = () => {
-        // Spend from the record, everything else from the live tracker. `fgId`
-        // is set in onSessionCreated below, which fires before the first
-        // assistant message — so nothing is spent while this reads zero.
-        const fgRecord = fgId ? manager.getRecord(fgId) : undefined;
-        const details: AgentDetails = {
-          ...detailBaseFor(fgRecord),
-          toolUses: fgState.toolUses,
-          tokens: fgRecord ? formatLifetimeTokens(fgRecord) : "",
-          cost: fgRecord ? getLifetimeCost(fgRecord.lifetimeUsage) : 0,
-          turnCount: fgState.turnCount,
-          maxTurns: fgState.maxTurns,
-          durationMs: Date.now() - startedAt,
-          // Deliberately still "running" while queued: the renderer routes any
-          // status it doesn't know to raw text (see the catch-all below), which
-          // would drop the spinner and read as hung. Only the activity line
-          // changes — "thinking…" would be a lie for an agent that has not
-          // started and may not for minutes.
-          status: "running",
-          activity: queuedAhead === undefined
-            ? describeActivity(fgState.activeTools, fgState.responseText)
-            : `queued — waiting for a foreground slot${queuedAhead > 0 ? ` (${queuedAhead} ahead)` : ""}`,
-          spinnerFrame: spinnerFrame % SPINNER.length,
-        };
-        onUpdate?.({
-          content: [{ type: "text", text: `${fgState.toolUses} tool uses...` }],
-          details: details as any,
-        });
-      };
-
-      const { state: fgState, callbacks: fgCallbacks } = createActivityTracker(effectiveMaxTurns, streamUpdate);
-
-      // Wire session creation: register in widget + stream to output file.
-      // The output file path is set synchronously after spawn (below),
-      // before onSessionCreated fires — same pattern as background agents.
-      const origOnSession = fgCallbacks.onSessionCreated;
-      fgCallbacks.onSessionCreated = (session: any) => {
-        origOnSession(session);
-        // It really started — stop reporting it as queued, and repaint now
-        // rather than leaving the stale line up for the next spinner tick.
-        // Guarded, so a spawn that never queued emits no extra update.
-        if (queuedAhead !== undefined) {
-          queuedAhead = undefined;
-          streamUpdate();
-        }
-        for (const a of manager.listAgents()) {
-          if (a.session === session) {
-            fgId = a.id;
-            agentActivity.set(a.id, fgState);
-            widget.ensureTimer();
-            fleet.ensureTimer();
-            fleet.update();
-            break;
-          }
-        }
-        // Stream conversation to output file (foreground agent logging)
-        if (fgId) {
-          const rec = manager.getRecord(fgId);
-          if (rec?.outputFile) {
-            rec.outputCleanup = streamToOutputFile(session, rec.outputFile, fgId, ctx.cwd);
-          }
-        }
-      };
-
-      // Animate spinner at ~80ms (smooth rotation through 10 braille frames)
-      const spinnerInterval = setInterval(() => {
-        spinnerFrame++;
-        streamUpdate();
-      }, 80);
-
-      streamUpdate();
-
-      let record: AgentRecord;
-      try {
-        const fgResult = await manager.spawnAndWait(pi, ctx, subagentType, params.prompt, {
-          description: params.description,
-          name: params.name as string | undefined,
-          model,
-          maxTurns: effectiveMaxTurns,
-          isolated,
-          inheritContext,
-          thinkingLevel: thinking,
-          isolation,
-          invocation: agentInvocation,
-          signal,
-          rootSessionId: ctx.sessionManager.getSessionId(),
-          // Deliberately does NOT set fgId: that drives agentActivity, the
-          // widget and the `finally` cleanup below, none of which should see an
-          // agent that has no session and may never get one.
-          onQueued: (_id, ahead) => { queuedAhead = ahead; streamUpdate(); },
-          ...fgCallbacks,
-        }, (fgAgentId) => {
-          // onSpawned: called synchronously after spawn, before onSessionCreated fires.
-          // Set up the output file so streamToOutputFile can pick it up.
-          const fgRec = manager.getRecord(fgAgentId);
-          attachTranscript(fgRec, fgAgentId);
-        });
-        record = fgResult.record;
-      } finally {
-        // Runs on both paths, so a startup throw — which now propagates, see
-        // the background spawn above (#179) — no longer leaves the spinner
-        // ticking or a finished agent on the widget.
-        clearInterval(spinnerInterval);
-        if (fgId) {
-          agentActivity.delete(fgId);
-          widget.markFinished(fgId);
-          fleet.onAgentFinished(fgId);
-        }
-      }
-
-      // Get final token count — from the record, like the cost below it, so the
-      // two describe the same work when the agent delegated to nested children.
-      const tokenText = formatLifetimeTokens(record);
-
-      const details = buildDetails(detailBaseFor(record), record, fgState, { tokens: tokenText });
-
-      if (record.status === "error") {
-        // Error headline + any partial output the run produced before failing.
-        return textResult(`${fallbackNote}Agent failed: ${record.error}${partialOutputSuffix(record)}`, details);
-      }
-
-      const durationMs = (record.completedAt ?? Date.now()) - record.startedAt;
-      const statsParts = [`${record.toolUses} tool uses`];
-      if (tokenText) statsParts.push(tokenText);
-      if (showCost) {
-        const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
-        if (costText) statsParts.push(costText);
-      }
-      return textResult(
-        `${fallbackNote}Agent completed in ${formatMs(durationMs)} (${statsParts.join(", ")})${getForegroundOutcomeNote(record.status)}.\n\n` +
-        (record.result?.trim() || "No output."),
-        details,
-      );
-    },
+      },
   });
   /**
    * Wrap a tool so its results carry back whatever subagent spend the parent
@@ -3297,7 +3057,6 @@ extensions: <true (inherit all MCP/extension tools), false (none), or comma-sepa
 skills: <true (inherit all), false (none), or comma-separated skill names to preload into prompt. Default: true>
 disallowed_tools: <comma-separated tool names to block, even if otherwise available. Omit for none>
 inherit_context: <true to fork parent conversation into agent so it sees chat history. Default: false>
-run_in_background: <pin this agent to background (true) or foreground (false). Omit to follow the backgroundByDefault setting, which is background>
 output_transcript: <false to write no transcript file or path for this agent. Independent of persist_session. Default: true>
 isolated: <true for no extension/MCP tools, only built-in tools. Default: false>
 memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit for none>${
@@ -3329,11 +3088,9 @@ Write the file using the write tool. Only write the file, nothing else.`;
     const { record } = await manager.spawnAndWait(pi, ctx, "general-purpose", generatePrompt, {
       description: `Generate ${name} agent`,
       maxTurns: 5,
-      // Exempt from maxConcurrentForeground. This runs from a modal wizard, not
-      // a tool call: it passes no signal, and Esc in `ctx.ui` never reaches the
-      // manager — so a user waiting behind a full pool would have no way to
-      // cancel at all. It is also one human action that cannot fan out, which
-      // is what the limit exists to bound. It still counts once started.
+      // This runs from a modal wizard, not a tool call: it passes no signal,
+      // and Esc in `ctx.ui` never reaches the manager. Start it immediately so
+      // the wizard cannot leave a user waiting behind a full pool.
       bypassQueue: true,
     });
 
@@ -3438,14 +3195,11 @@ Write the file using the write tool. Only write the file, nothing else.`;
   function snapshotSettings() {
     return {
       maxConcurrent: manager.getMaxConcurrent(),
-      // 0 = unlimited, and the default — see SubagentsSettings.
-      maxConcurrentForeground: manager.getMaxConcurrentForeground(),
       // 0 = unlimited — per SubagentsSettings.defaultMaxTurns docstring and
       // normalizeMaxTurns() in agent-runner.ts (which maps 0 → undefined).
       defaultMaxTurns: getDefaultMaxTurns() ?? 0,
       graceTurns: getGraceTurns(),
       defaultJoinMode: getDefaultJoinMode(),
-      backgroundByDefault: getBackgroundByDefault(),
       schedulingEnabled: isSchedulingEnabled(),
       scopeModels: isScopeModelsEnabled(),
       strictAgentFiles,
@@ -3490,13 +3244,12 @@ Write the file using the write tool. Only write the file, nothing else.`;
   void _settingsSnapshotIsComplete;
 
   const NUMERIC_IDS = new Set([
-    "maxConcurrent", "maxConcurrentForeground", "defaultMaxTurns", "graceTurns", "maxSubagentDepth",
+    "maxConcurrent", "defaultMaxTurns", "graceTurns", "maxSubagentDepth",
   ]);
 
   async function showSettings(ctx: ExtensionCommandContext) {
     function buildItems(): SettingItem[] {
       const mc = manager.getMaxConcurrent();
-      const mcf = manager.getMaxConcurrentForeground();
       const dmt = getDefaultMaxTurns() ?? 0;
       const gt = getGraceTurns();
       const msd = getMaxSubagentDepth();
@@ -3515,13 +3268,6 @@ Write the file using the write tool. Only write the file, nothing else.`;
           description: "Max concurrent background agents (Enter to type)",
           currentValue: String(mc),
           values: [String(mc)],
-        },
-        {
-          id: "maxConcurrentForeground",
-          label: "Max foreground concurrency",
-          description: "Max concurrent foreground (blocking) agents (0 = unlimited, Enter to type)",
-          currentValue: String(mcf),
-          values: [String(mcf)],
         },
         {
           id: "defaultMaxTurns",
@@ -3550,13 +3296,6 @@ Write the file using the write tool. Only write the file, nothing else.`;
           description: "Default join mode for background agents",
           currentValue: getDefaultJoinMode(),
           values: ["smart", "async", "group"],
-        },
-        {
-          id: "backgroundByDefault",
-          label: "Background by default",
-          description: "An Agent call that doesn't say runs detached (off = blocks the turn and returns inline)",
-          currentValue: getBackgroundByDefault() ? "on" : "off",
-          values: ["on", "off"],
         },
         {
           id: "schedulingEnabled",
@@ -3673,7 +3412,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
         {
           id: "widgetMode",
           label: "Widget",
-          description: "Above-editor agent widget: all = every agent; background = hide foreground (they already render inline); off = hide the widget.",
+          description: "Above-editor agent widget: all/background = show agent rows; off = hide the widget.",
           currentValue: getWidgetMode(),
           values: ["all", "background", "off"],
         },
@@ -3693,15 +3432,6 @@ Write the file using the write tool. Only write the file, nothing else.`;
         if (n >= 1) {
           manager.setMaxConcurrent(n);
           notifyApplied(ctx, `Max concurrency set to ${n}`);
-        }
-      } else if (id === "maxConcurrentForeground") {
-        // 0 is meaningful here, unlike maxConcurrent above: it means unlimited.
-        const n = parseInt(value, 10);
-        if (n >= 0) {
-          manager.setMaxConcurrentForeground(n);
-          notifyApplied(ctx, n === 0
-            ? "Max foreground concurrency set to unlimited"
-            : `Max foreground concurrency set to ${n}`);
         }
       } else if (id === "defaultMaxTurns") {
         const n = parseInt(value, 10);
@@ -3732,15 +3462,6 @@ Write the file using the write tool. Only write the file, nothing else.`;
       } else if (id === "joinMode") {
         setDefaultJoinMode(value as JoinMode);
         notifyApplied(ctx, `Default join mode set to ${value}`);
-      } else if (id === "backgroundByDefault") {
-        const enabled = value === "on";
-        setBackgroundByDefault(enabled);
-        notifyApplied(
-          ctx,
-          enabled
-            ? "Agent calls run in the background unless they pass run_in_background: false"
-            : "Agent calls block and return inline unless they pass run_in_background: true",
-        );
       } else if (id === "schedulingEnabled") {
         const enabled = value === "on";
         if (enabled === isSchedulingEnabled()) {
@@ -3896,9 +3617,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
     if (result && NUMERIC_IDS.has(result)) {
       const current = result === "maxConcurrent"
         ? String(manager.getMaxConcurrent())
-        : result === "maxConcurrentForeground"
-          ? String(manager.getMaxConcurrentForeground())
-          : result === "defaultMaxTurns"
+        : result === "defaultMaxTurns"
             ? String(getDefaultMaxTurns() ?? 0)
             : result === "maxSubagentDepth"
               ? String(getMaxSubagentDepth())
@@ -3906,9 +3625,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
 
       const label = result === "maxConcurrent"
         ? "Max concurrency (1+)"
-        : result === "maxConcurrentForeground"
-          ? "Max foreground concurrency (0 = unlimited)"
-          : result === "defaultMaxTurns"
+        : result === "defaultMaxTurns"
             ? "Default max turns (0 = unlimited)"
             : result === "maxSubagentDepth"
               ? "Nested depth (0/1 = nesting off)"

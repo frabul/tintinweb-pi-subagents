@@ -1,17 +1,9 @@
 /**
  * agent-manager.ts — Tracks agents, background execution, resume support.
  *
- * There are two independent concurrency pools, never one:
- *
- * - Background (`maxConcurrent`, default 10) bounds detached agents.
- * - Foreground (`maxConcurrentForeground`, default 0 = unlimited) bounds
- *   agents a caller is blocking on inline — `spawnAndWait`.
- *
- * Independent by design: a foreground agent blocks the parent anyway, so
- * charging it to the background pool would let a saturated pool starve the main
- * session of work it could have done itself. Excess agents in either pool are
- * queued and auto-started as slots free up. Nested children take no slot in
- * either — see `occupiesPoolSlot` / `occupiesForegroundSlot`.
+ * Every top-level agent runs detached and is bounded by `maxConcurrent`.
+ * Nested and workflow-owned children are excluded from that pool because their
+ * owner already accounts for their work and may be waiting on them.
  */
 
 import { randomUUID } from "node:crypto";
@@ -45,26 +37,12 @@ export type CompactionInfo = { reason: "manual" | "threshold" | "overflow"; toke
 /**
  * Default max concurrent background agents.
  *
- * Raised from 4 when top-level spawns started defaulting to background
- * (`backgroundByDefault`): foreground agents bypass this pool entirely, so
- * while foreground was the default a fan-out of six ran six. With background
- * as the default every top-level agent takes a slot, and a limit of 4 would
- * have silently queued the tail of exactly the parallel fan-outs the `Agent`
- * tool description tells the model to send.
+ * Raised from 4 when top-level spawns became detached. A limit of 4 would
+ * otherwise queue the tail of the parallel fan-outs the `Agent` tool
+ * description tells the model to send.
  */
 const DEFAULT_MAX_CONCURRENT = 10;
 
-/**
- * Default max concurrent foreground (blocking) agents — `0` = unlimited, the
- * extension's existing convention for "no ceiling" (`defaultMaxTurns`).
- *
- * Off by default because nothing here ever bounded foreground work, and pi
- * dispatches a message's tool calls through `Promise.all`, so an unqualified
- * fan-out of blocking `Agent` calls has always run all at once. Users who want
- * it bounded — chiefly local models, where parallel agents thrash the prompt
- * cache (#253) — opt in; everyone else keeps today's behaviour exactly.
- */
-const DEFAULT_MAX_CONCURRENT_FOREGROUND = 0;
 
 /**
  * How many evicted agents stay addressable by name. Only a bound on memory —
@@ -105,9 +83,9 @@ function assertValidSpawnCwd(cwd: unknown): asserts cwd is string | undefined | 
  * spawn costs it a turn, which is unbounded when max turns is unlimited.
  */
 function occupiesPoolSlot(
-  record: Pick<AgentRecord, "isBackground" | "parentAgentId" | "workflowId">,
+  record: Pick<AgentRecord, "parentAgentId" | "workflowId">,
 ): boolean {
-  return !!record.isBackground && isTopLevelAgent(record);
+  return isTopLevelAgent(record);
 }
 
 /**
@@ -125,38 +103,9 @@ export function isTopLevelAgent(
   return record.parentAgentId === undefined && record.workflowId === undefined;
 }
 
-/**
- * Whether a record occupies one of the `maxConcurrentForeground` slots.
- *
- * Keyed on `blocking` — a caller awaiting this record inline — rather than on
- * `isBackground === false`, because `spawn()` is also the funnel for DETACHED
- * starts (cross-extension RPC, `@handle` mentions, the registry) that may pass
- * `isBackground: false` and are documented to run immediately regardless. Those
- * block nobody, so bounding them buys nothing and would park a record with no
- * one waiting to release it.
- *
- * Nested children are excluded for the same reason as `occupiesPoolSlot`, and
- * more sharply: their parent is blocked *awaiting them*, so queueing a child
- * behind its own parent is a guaranteed deadlock rather than a possible one.
- * Enforced here rather than at the call site so no caller can reintroduce it.
- *
- * A workflow's children go out through `spawnAndWait` and so are `blocking`
- * too, and are excluded on the same `isTopLevelAgent` test as the background
- * pool: the run already caps how many of its agents run at once, and charging
- * them here as well would let one fan-out queue behind a limit meant for the
- * session's own work.
- *
- * Like the background pool this bounds width at the top level only — a parent's
- * own fan-out is limited by nothing but its turn budget.
- */
-function occupiesForegroundSlot(
-  record: Pick<AgentRecord, "blocking" | "parentAgentId" | "workflowId">,
-): boolean {
-  return !!record.blocking && isTopLevelAgent(record);
-}
 
-/** Which concurrency pool a spawn is charged to, if any. */
-type Pool = "background" | "foreground";
+/** The background pool is the only pool used by subagent spawns. */
+type Pool = "background";
 
 interface SpawnArgs {
   pi: ExtensionAPI;
@@ -198,25 +147,22 @@ interface SpawnOptions {
   isolated?: boolean;
   inheritContext?: boolean;
   thinkingLevel?: ThinkingLevel;
+  /**
+   * Legacy compatibility field. Every spawn is detached and runs in the
+   * background; the value is ignored.
+   */
   isBackground?: boolean;
   /**
-   * Skip whichever pool's queue check applies to this spawn — start immediately
-   * even if the configured concurrency limit would otherwise queue it. The slot
-   * is still COUNTED once the run starts, so a bypassing spawn transiently
-   * exceeds the limit rather than being invisible to it.
+   * Skip the background queue check for this spawn — start immediately even if
+   * the configured concurrency limit would otherwise queue it. The slot is
+   * still COUNTED once the run starts, so a bypassing spawn transiently exceeds
+   * the limit rather than being invisible to it.
    *
    * Used by the scheduler, so a fired job can't be deferred past its trigger
    * window, and by the `/agents` agent-file generator, which has no way to
    * cancel a wait (see its call site).
    */
   bypassQueue?: boolean;
-  /**
-   * A caller is awaiting this record inline (`spawnAndWait`) — what
-   * `maxConcurrentForeground` bounds. Set only by `spawnAndWait`; stripped from
-   * caller-supplied options by `spawnTopLevel`, since a forged `blocking` would
-   * defer a detached start behind a queue its caller cannot see or release.
-   */
-  blocking?: boolean;
   /**
    * The workflow run this child belongs to, when a workflow spawned it.
    *
@@ -268,17 +214,11 @@ interface SpawnOptions {
    * before `onSessionCreated` fires — where callers attach the output file.
    *
    * Carried on the options rather than parked on the manager for the duration
-   * of a spawn: with a foreground queue, `startAgent` can run at drain time,
-   * long after any such field would have been restored, and the callback would
-   * silently never fire (or fire into an unrelated caller's closure).
+   * of a spawn: `startAgent` can run at drain time, long after any such field
+   * would have been restored, and the callback would silently never fire (or
+   * fire into an unrelated caller's closure).
    */
   onSpawned?: (id: string) => void;
-  /**
-   * Called synchronously when the spawn is queued instead of started, with how
-   * many entries in its own pool are ahead of it. The foreground UI uses it to
-   * say so while it waits; nothing else needs it.
-   */
-  onQueued?: (id: string, ahead: number) => void;
   /** Called on tool start/end with activity info (for streaming progress to UI). */
   onToolActivity?: (activity: ToolActivity) => void;
   /** Called on streaming text deltas from the assistant response. */
@@ -305,11 +245,9 @@ interface SpawnOptions {
 
 interface ResumeOptions {
   /**
-   * Run the resumed turn detached in the background: return immediately with
-   * the record still "running" (or "queued" at the concurrency limit) and
-   * notify on completion via onComplete, exactly like a background spawn.
-   * Default (false/undefined) runs the resume inline and returns the settled
-   * record — the historical behavior.
+   * Legacy compatibility flag. Resumes started by the Agent tool are detached;
+   * the value is retained for internal callers that still select the
+   * synchronous workflow path.
    */
   isBackground?: boolean;
   /** Called on tool start/end with activity info (for streaming progress to UI). */
@@ -368,7 +306,6 @@ export class AgentManager {
   private onCompact?: OnAgentCompact;
   private onUsage?: OnAgentUsage;
   private maxConcurrent: number;
-  private maxConcurrentForeground = DEFAULT_MAX_CONCURRENT_FOREGROUND;
   /** Base repos worktrees were created from — so dispose() can prune them all,
    *  not just the parent repo (caller-supplied cwd can target other repos). */
   private worktreeRepos = new Set<string>();
@@ -393,9 +330,7 @@ export class AgentManager {
   private tombstones = new Map<string, AgentTombstone>();
 
   /**
-   * Agents waiting to start, tagged with the pool they wait on. One queue for
-   * both pools: `drainQueue` picks the earliest entry whose own pool has room,
-   * so neither can head-of-line-block the other, and every removal path
+   * Agents waiting to start in the background pool. Every removal path
    * (`abort`, `abortAll`, `dispose`) stays a single filter.
    *
    * `release` wakes a caller blocked in `spawnAndWait`, and is fired once the
@@ -409,9 +344,6 @@ export class AgentManager {
   private queue: { id: string; pool: Pool; start: () => Promise<void>; release: () => void }[] = [];
   /** Number of currently running background agents. */
   private runningBackground = 0;
-  /** Number of currently running foreground (blocking) agents. */
-  private runningForeground = 0;
-
   constructor(
     onComplete?: OnAgentComplete,
     maxConcurrent = DEFAULT_MAX_CONCURRENT,
@@ -440,41 +372,13 @@ export class AgentManager {
     return this.maxConcurrent;
   }
 
-  /** Update the max concurrent foreground (blocking) agents limit. 0 = unlimited. */
-  setMaxConcurrentForeground(n: number) {
-    // Floor 0, not 1: unlimited is a meaningful value here and the default.
-    this.maxConcurrentForeground = Math.max(0, n);
-    // Start queued agents if the new limit allows — including everything, when
-    // the limit is cleared back to unlimited mid-run.
-    this.drainQueue();
-  }
-
-  getMaxConcurrentForeground(): number {
-    return this.maxConcurrentForeground;
-  }
-
-  /**
-   * Which pool a spawn is charged to, or undefined for one that is charged to
-   * neither (nested children, detached non-background spawns).
-   *
-   * Nothing here queues when the limit is unset — `poolHasRoom` reports an
-   * unlimited pool as always having room, so that alone is what keeps the
-   * default path identical. The `> 0` guard is belt and braces on top: it also
-   * keeps the counter from churning and the settle path from calling a drain
-   * that would find nothing to do. Both are unobservable, which is why no test
-   * pins them; the observable half — that the default start stays synchronous —
-   * is pinned in `test/foreground-concurrency.test.ts`.
-   */
+  /** Return the background pool for top-level agents, or no pool for children. */
   private poolFor(record: AgentRecord): Pool | undefined {
-    if (occupiesPoolSlot(record)) return "background";
-    if (this.maxConcurrentForeground > 0 && occupiesForegroundSlot(record)) return "foreground";
-    return undefined;
+    return occupiesPoolSlot(record) ? "background" : undefined;
   }
 
-  private poolHasRoom(pool: Pool): boolean {
-    return pool === "background"
-      ? this.runningBackground < this.maxConcurrent
-      : this.maxConcurrentForeground === 0 || this.runningForeground < this.maxConcurrentForeground;
+  private poolHasRoom(_pool: Pool): boolean {
+    return this.runningBackground < this.maxConcurrent;
   }
 
   /**
@@ -516,25 +420,17 @@ export class AgentManager {
       // see the handle this record just took, since both come out of the same
       // namespace.
       alias: isTopLevelAgent(options) ? options.reclaim?.alias : undefined,
-      // Overwritten below when the spawn is actually queued; a foreground spawn
-      // that queues flips to "queued" there rather than being guessed at here,
-      // since the pool decision needs the finished record.
-      status: options.isBackground ? "queued" : "running",
+      // Overwritten below when the spawn is actually queued; immediate starts
+      // switch to "running" in startAgent.
+      status: "queued",
       toolUses: 0,
       startedAt: Date.now(),
       abortController,
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
       compactionCount: 0,
-      // Raw tri-state (not coerced to a boolean): true = background, false =
-      // foreground (has an inline tool-result surface), undefined = caller never
-      // declared it (e.g. a cross-extension RPC spawn). The widget's background-
-      // only filter excludes only explicit `false`, so undefined agents — which
-      // have no inline surface — stay visible instead of vanishing.
-      isBackground: options.isBackground,
-      // Whether anyone is awaiting this agent is a property of the agent, not
-      // of the call that made it — and both settle paths need it long after
-      // `options` has stopped being the interesting object.
-      blocking: options.blocking,
+      // All records are detached. Keep the flag on the record for lifecycle
+      // payload compatibility and for UI consumers that inspect it.
+      isBackground: true,
       invocation: options.invocation,
       depth: options.depth ?? 1,
       parentAgentId: options.parentAgentId,
@@ -554,9 +450,7 @@ export class AgentManager {
 
     const pool = this.poolFor(record);
     if (pool !== undefined && !options.bypassQueue && !this.poolHasRoom(pool)) {
-      // Queue it — started when a running agent in the same pool completes.
-      // Idempotent for background (already "queued"); the flip that matters is
-      // a blocking foreground spawn, optimistically marked "running" above.
+      // Queue it — started when a running agent in the background pool completes.
       record.status = "queued";
       // A queued record never reaches startAgent's signal wiring, so arm the
       // parent abort here or Esc could not release the position.
@@ -569,7 +463,6 @@ export class AgentManager {
         start: () => this.launch(id, record, args, pool),
         release: () => release(),
       });
-      options.onQueued?.(id, this.queue.filter(e => e.pool === pool).length - 1);
       return id;
     }
 
@@ -625,10 +518,6 @@ export class AgentManager {
       (err) => {
         this.startups.delete(id);
         if (queuedPool !== undefined) {
-          // Mirrors settleRun: an inline caller gets this failure as a throw
-          // out of spawnAndWait, so an unconsumed record would ALSO nudge the
-          // session about it — the same failure reported twice.
-          if (queuedPool === "foreground") record.resultConsumed = true;
           record.status = "error";
           record.error = err instanceof Error ? err.message : String(err);
           record.completedAt = Date.now();
@@ -684,23 +573,17 @@ export class AgentManager {
     // still copying its repo. Claiming "running" here also keeps abort() and
     // abortAll() able to reach an agent whose worktree is still being created.
     //
-    // The pool is resolved ONCE, here, and carried to `settleRun` below:
-    // `poolFor` reads `maxConcurrentForeground`, which the user can change from
-    // `/agents → Settings` mid-run, so recomputing it at settle time would
-    // decrement a pool this run never charged (counter underflow, limit
-    // silently lifted) or skip the decrement for one it did (leaked slot —
-    // every later blocking spawn queues forever). The two startup exits below
-    // never reach `settleRun`, so they hand the slot back themselves.
+    // The pool is resolved once here and carried to `settleRun` below. The two
+    // startup exits below never reach `settleRun`, so they hand the slot back
+    // themselves.
     const pool = this.poolFor(record);
     const releaseSlot = () => {
       if (pool === "background") this.runningBackground--;
-      else if (pool === "foreground") this.runningForeground--;
     };
     record.status = "running";
     record.startedAt = Date.now();
     record.startGate = undefined;
     if (pool === "background") this.runningBackground++;
-    else if (pool === "foreground") this.runningForeground++;
 
     // Worktree isolation: try to create a temporary git worktree. Strict —
     // fail loud if not possible (no silent fallback to main tree). Done BEFORE
@@ -955,20 +838,15 @@ export class AgentManager {
    * only fires its controller and leaves the run to settle normally, so
    * decrementing there too would double-free — permanently lifting the limit.
    *
-   * Foreground agents fire `onComplete` for lifecycle symmetry, with
-   * `resultConsumed` set so the callback skips notifications the inline result
-   * already delivered.
+   * Every run fires `onComplete`; callers that synchronously consume a result
+   * can pre-mark `resultConsumed` before awaiting it.
    *
    * @param guardCallback swallow a throwing `onComplete` (the success path does;
    *   the error path historically did not, and keeps not doing so).
-   * @param pool the pool this run was CHARGED TO at start time — passed in, not
-   *   recomputed, so a mid-run change to `maxConcurrentForeground` can't make
-   *   the release disagree with the acquire.
+   * @param pool the pool this run was charged to at start time.
    */
   private settleRun(record: AgentRecord, guardCallback: boolean, pool: Pool | undefined): void {
-    if (!record.isBackground) record.resultConsumed = true;
     if (pool === "background") this.runningBackground--;
-    else if (pool === "foreground") this.runningForeground--;
 
     if (guardCallback) {
       try { this.onComplete?.(record); } catch { /* ignore completion side-effect errors */ }
@@ -976,13 +854,7 @@ export class AgentManager {
       this.onComplete?.(record);
     }
 
-    // The isBackground half reproduces the pre-pool condition exactly — a
-    // background settle has always drained, even for a nested child that held
-    // no slot — so that path is unchanged whether or not the foreground pool is
-    // on. The `pool` half only adds the drain a freed FOREGROUND slot needs.
-    // A drain with nothing freed is a no-op anyway, but "no-op" is a claim
-    // about reachability, and matching the old condition needs no such claim.
-    if (record.isBackground || pool !== undefined) this.drainQueue();
+    if (pool !== undefined) this.drainQueue();
   }
 
   /**
@@ -997,14 +869,7 @@ export class AgentManager {
     }
   }
 
-  /**
-   * Start queued agents up to each pool's concurrency limit.
-   *
-   * `findIndex` on the entry's OWN pool rather than `shift`: with one queue
-   * serving two independent limits, a saturated foreground pool at the head
-   * would otherwise stall every background agent behind it. Taking the earliest
-   * eligible entry keeps FIFO within each pool, which is what callers see.
-   */
+  /** Start queued agents up to the background concurrency limit. */
   private drainQueue() {
     for (;;) {
       const i = this.queue.findIndex(e => this.poolHasRoom(e.pool));
@@ -1041,9 +906,9 @@ export class AgentManager {
   }
 
   /**
-   * Spawn an agent and wait for completion (foreground use).
-   * Charged to the foreground pool (`maxConcurrentForeground`), which is
-   * unlimited by default; never to the background one.
+   * Spawn an agent and wait for completion for an internal coordinator such as
+   * a workflow. The run is still recorded as a background spawn; this helper
+   * only waits for its result before returning it.
    * Returns { id, record } so callers can access the agent ID.
    *
    * @param onSpawned - Called synchronously once the run is kicked off, before
@@ -1058,32 +923,31 @@ export class AgentManager {
     options: Omit<SpawnOptions, "isBackground">,
     onSpawned?: (id: string) => void,
   ): Promise<{ id: string; record: AgentRecord }> {
-    // `blocking` is what maxConcurrentForeground bounds, and this is its only
-    // source. onSpawned rides on the options rather than on a field of this
-    // manager: a queued spawn starts at drain time, long after any install/
-    // restore pair around this call would have put the field back — and it now
-    // fires after an await (worktree creation) even on the immediate path.
+    // onSpawned rides on the options rather than on a field of this manager: a
+    // queued spawn starts at drain time, long after any install/restore pair
+    // around this call would have put the field back — and it now fires after
+    // an await (worktree creation) even on the immediate path.
     const id = this.spawn(pi, ctx, type, prompt, {
       ...options,
-      isBackground: false,
-      blocking: true,
+      isBackground: true,
       onSpawned,
     });
     const record = this.agents.get(id)!;
+    // This helper's caller consumes the returned record synchronously, so its
+    // completion callback must not also trigger a notification.
+    record.resultConsumed = true;
 
     // Queued: nothing to await yet — the promise appears when the drain starts
     // it. The gate resolves (never rejects) on every path out of the queue,
-    // start and abort alike, so a rejection can never escape into the caller's
-    // tool `execute` and take down pi's whole Promise.all tool batch.
+    // start and abort alike, so a rejection can never escape into a coordinator.
     if (record.status === "queued") await record.startGate;
 
     // The run promise only exists once startup is past its awaited repo copy —
     // without this the call would return before the agent had started at all.
     // A startup failure (strict worktree isolation) rejects here, which is what
-    // the immediate path owes its caller: pi only marks a tool result failed
-    // when `execute` throws. A queued spawn's failure landed on the record
-    // instead (nobody was awaiting `startups` at drain time) and is rethrown
-    // below, so the contract is the same either way.
+    // the immediate path owes its caller. A queued spawn's failure landed on
+    // the record instead (nobody was awaiting `startups` at drain time) and is
+    // rethrown below, so the contract is the same either way.
     await this.awaitStartup(id);
 
     // undefined when it was aborted while queued, or stopped mid-copy, and so
@@ -1113,12 +977,11 @@ export class AgentManager {
     const record = this.agents.get(id);
     if (!record?.session) return undefined;
 
-    // Background resume: settle asynchronously and notify on completion exactly
-    // like a background spawn, returning immediately with the record still
-    // "running" — or "queued" when at the concurrency limit. Previously
-    // run_in_background was ignored on resume (the Agent tool's resume branch
-    // returned before its background branch, and resume() only ever awaited
-    // inline), so a resumed agent always blocked the caller until it finished.
+    // Detached resume: settle asynchronously and notify on completion exactly
+    // like a fresh detached spawn, returning immediately with the record still
+    // "running" — or "queued" when at the concurrency limit. The Agent tool
+    // always selects this path; the synchronous path below remains only for
+    // internal workflow coordination.
     if (options?.isBackground) {
       // Never re-enter a run that is still in flight. Detaching means the caller
       // gets control back while the record stays "running", so nothing stops the
@@ -1166,7 +1029,7 @@ export class AgentManager {
       return record;
     }
 
-    // Foreground resume: run inline and return the settled record.
+    // Synchronous coordinator resume: run inline and return the settled record.
     record.status = "running";
     record.startedAt = Date.now();
     record.completedAt = undefined;
@@ -1235,10 +1098,9 @@ export class AgentManager {
     // than the previous one's settled controller.
     const abortController = new AbortController();
     record.abortController = abortController;
-    // Optional, and NOT what the Agent tool passes for a detached resume: a
-    // parent signal aborts on the parent's own interrupt (user Esc), which is
-    // right for a foreground run whose result the caller is awaiting, and wrong
-    // for a detached one — background spawns omit it for exactly this reason.
+    // Detached resumes from the Agent tool omit a parent signal: aborting on
+    // the parent's own interrupt (user Esc) would stop work that was already
+    // handed off. Internal coordinators may still pass one explicitly.
     let detachParentSignal: (() => void) | undefined;
     if (parentSignal) {
       const onParentAbort = () => this.abort(id);
@@ -1409,8 +1271,7 @@ export class AgentManager {
     if (!record) return false;
 
     // Remove from queue if queued. No decrement — the slot was never taken —
-    // and no onComplete, matching what a queued background abort has always
-    // done; a blocking caller learns of the stop from its own tool result.
+    // and no onComplete, matching the detached background contract.
     if (record.status === "queued") {
       this.dequeue(q => q.id === id);
       record.status = "stopped";

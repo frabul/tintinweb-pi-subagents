@@ -21,14 +21,14 @@ For the channel list, the reply envelope, the per-channel snippets and the event
 | `isolated` | boolean | Strips extensions, skills and nested tools. **Not** a git worktree — see the trap table below |
 | `inheritContext` | boolean | Fork the parent conversation into the child |
 | `thinkingLevel` | ThinkingLevel | Clamped to what the resolved model supports |
-| `isBackground` | boolean | Occupies a `maxConcurrent` slot and queues behind them. Every RPC spawn runs detached regardless; this is what decides whether it is *pooled* |
+| `isBackground` | boolean | Legacy compatibility field. Every RPC spawn is detached and occupies a `maxConcurrent` slot; the value is ignored |
 | `bypassQueue` | boolean | Starts immediately even when the concurrency limit would queue it. The slot is still counted once running |
 | `structuredOutput` | CompiledSchema | Makes the child report through a `StructuredOutput` tool |
 | `isolation` | `"worktree"` | Temp git worktree, committed to a `pi-agent-*` branch on completion |
 | `cwd` | absolute path | The agent's tools operate here; `.pi` config still loads from the parent session's project |
 | `invocation` | AgentInvocation | Resolved snapshot used for UI display |
 | `signal` | AbortSignal | Aborting it stops the subagent |
-| `onSpawned` / `onQueued` / `onCompaction` / `onBeforeWorktreeCleanup` | functions | Fire as documented on `SpawnOptions` |
+| `onSpawned` / `onCompaction` / `onBeforeWorktreeCleanup` | functions | Fire as documented on `SpawnOptions` |
 
 **Silently stripped** — set these and nothing happens, with no error and no note. Each deletion is a deliberate guard, and the reasons are worth knowing because they say what the surface refuses to let a caller forge:
 
@@ -41,7 +41,7 @@ For the channel list, the reply envelope, the per-channel snippets and the event
 | `rootSessionId` | Names a transcript directory, so a forged value is a path-traversal primitive |
 | `resumeSessionFile` | Worse: it names a file to **open and replay** as a conversation. Dispatcher only, and only from a path this extension itself recorded |
 | `reclaim` | Bypasses handle allocation, so a forged value would duplicate a live agent's name and make `@handle` ambiguous |
-| `blocking` | Every spawn through here is detached. A forged `blocking` would charge it to the foreground pool and defer it behind a queue whose gate nobody is holding |
+| `blocking` | Every spawn through here is detached. This legacy internal field is stripped so callers cannot alter ownership or queue behavior |
 
 **Silently overwritten** — `onToolActivity`, `onTextDelta`, `onTurnEnd`, `onSessionCreated` and `onAssistantUsage` are replaced by the activity tracker's own (`src/index.ts:693`). Every programmatic spawn passes through one funnel so none can supply half-wired callbacks; a half-wired tracker renders worse than none, which is the bug behind a row that reads `thinking…` for an agent's whole life ([#181](https://github.com/tintinweb/pi-subagents/pull/181)).
 
@@ -58,7 +58,7 @@ One of these already shipped as a bug in this project's own README example, so i
 
 | You might write | What it does | What you meant |
 |---|---|---|
-| `run_in_background` | Forwarded verbatim and ignored — it is the [`Agent`](../README.md#agent) *tool's* parameter name | `isBackground` |
+| `run_in_background` | Forwarded verbatim and ignored — it is a legacy [`Agent`](../README.md#agent) parameter name | `isBackground` is also ignored; all RPC spawns are detached |
 | `isolated: true` | Disables extensions, skills and nested tools | `isolation: "worktree"` for a git worktree |
 | `isolation: "worktree"` | Creates a git worktree | `isolated: true` to strip capabilities |
 | `configCwd` | Stripped | `cwd` |

@@ -1,21 +1,20 @@
 /**
- * background-by-default.test.ts — the `backgroundByDefault` flip, asserted at
- * the tool boundary rather than at the resolver.
+ * background-only Agent execution, asserted at the tool boundary rather than
+ * at the resolver.
  *
- * `documented-defaults.test.ts` pins `resolveAgentInvocationConfig`'s arguments;
- * this pins what the orchestrator actually receives back from a real `Agent`
- * call, which is the part the tool description makes promises about:
+ * `documented-defaults.test.ts` pins the resolver; this pins what the
+ * orchestrator actually receives back from a real `Agent` call, which is the
+ * contract the tool description makes promises about:
  *
- *   - an unqualified spawn hands back an ID instead of the agent's output,
- *   - `run_in_background: false` still blocks and returns the output inline,
- *   - a fan-out sized like the ones the description tells the model to send
- *     runs concurrently instead of queueing behind `maxConcurrent`.
- *
- * That last one is the reason the concurrency default moved 4 → 10: foreground
- * agents bypass the pool, so the limit only started applying to ordinary
- * parallel work once background became the default.
+ *   - every spawn hands back an ID instead of the agent's output,
+ *   - legacy `run_in_background: false` input cannot select inline execution,
+ *   - a fan-out sized like the description's parallel examples runs
+ *     concurrently instead of queueing behind the default limit.
  */
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -24,6 +23,28 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+
+let originalAgentDir: string | undefined;
+let originalHome: string | undefined;
+let isolatedDir: string;
+
+beforeEach(() => {
+  originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  originalHome = process.env.HOME;
+  isolatedDir = mkdtempSync(join(tmpdir(), "background-by-default-"));
+  process.env.PI_CODING_AGENT_DIR = join(isolatedDir, "agent-dir");
+  process.env.HOME = isolatedDir;
+});
+
+afterEach(() => {
+  delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+  if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  if (originalHome == null) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  rmSync(isolatedDir, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -77,7 +98,7 @@ function spawn(tools: Map<string, any>, params: Record<string, unknown> = {}) {
   );
 }
 
-describe("backgroundByDefault", () => {
+describe("background-only Agent execution", () => {
   it("returns an agent ID, not the result, when the call doesn't specify", async () => {
     const { pi, tools } = makePi();
     subagentsExtension(pi);
@@ -91,15 +112,16 @@ describe("backgroundByDefault", () => {
     expect(out).not.toContain("THE-PAYLOAD");
   });
 
-  it("still blocks and returns the output inline when run_in_background is false", async () => {
+  it("ignores a legacy false flag and still returns a background handoff", async () => {
     const { pi, tools } = makePi();
     subagentsExtension(pi);
     settled("THE-PAYLOAD");
 
     const out = textOf(await spawn(tools, { run_in_background: false }));
 
-    expect(out).toContain("THE-PAYLOAD");
-    expect(out).not.toContain("started in background");
+    expect(out).toContain("Agent ID:");
+    expect(out).toContain("started in background");
+    expect(out).not.toContain("THE-PAYLOAD");
   });
 
   it("starts a six-way fan-out concurrently instead of queueing the tail", async () => {

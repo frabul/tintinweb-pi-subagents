@@ -81,14 +81,8 @@ interface ResolveOptions {
    */
   worktreeAllowed?: boolean;
   /**
-   * What an unqualified spawn means — neither the call nor the agent file said.
-   *
-   * Top-level callers pass the `backgroundByDefault` setting (default `true`,
-   * following Claude Code). Nested callers pass `false` unconditionally: a
-   * detached child is killed by `abortOwnedChildren` when its parent settles
-   * and has no notification path of its own, so backgrounding one loses its
-   * work. Both call sites pass it explicitly; the `false` fallback only covers
-   * a caller that supplies no options at all, which in-tree means tests.
+   * Legacy compatibility option. Spawns are always detached now, so callers
+   * may continue to pass this field but it no longer changes the result.
    */
   defaultRunInBackground?: boolean;
 }
@@ -138,7 +132,9 @@ export function resolveAgentInvocationConfig(
     thinking: (agentConfig?.thinking ?? params.thinking) as ThinkingLevel | undefined,
     maxTurns: agentConfig?.maxTurns ?? params.max_turns,
     inheritContext: agentConfig?.inheritContext ?? params.inherit_context ?? false,
-    runInBackground: agentConfig?.runInBackground ?? params.run_in_background ?? opts?.defaultRunInBackground ?? false,
+    // Retain the resolved field for invocation snapshots and older callers,
+    // but never allow configuration or legacy options to select inline work.
+    runInBackground: true,
     isolated: agentConfig?.isolated ?? params.isolated ?? false,
     isolation,
     // Undefined rather than an empty object when nothing was overridden: callers
@@ -150,6 +146,6 @@ export function resolveAgentInvocationConfig(
   };
 }
 
-export function resolveJoinMode(defaultJoinMode: JoinMode, runInBackground: boolean): JoinMode | undefined {
-  return runInBackground ? defaultJoinMode : undefined;
+export function resolveJoinMode(defaultJoinMode: JoinMode): JoinMode {
+  return defaultJoinMode;
 }

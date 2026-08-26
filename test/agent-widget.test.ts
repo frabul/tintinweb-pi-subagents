@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { renderRunningAgentStatus } from "../src/index.js";
 import type { WidgetMode } from "../src/types.js";
 import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatCost, formatSessionTokens } from "../src/ui/agent-widget.js";
 
@@ -39,18 +38,6 @@ describe("formatSessionTokens", () => {
     expect(fgPreservingNestedStyles(ansiTheme, "accent", tokenText)).toBe(
       "\u001b[35m1.2k token (\u001b[33m70%\u001b[39m\u001b[35m)\u001b[39m",
     );
-  });
-});
-
-describe("renderRunningAgentStatus", () => {
-  it("renders running status as separate component lines", () => {
-    const theme = { fg: (_c: string, s: string) => s };
-    const component = renderRunningAgentStatus("⠋", "thinking: xhigh · 4 tool uses", "thinking…", theme);
-
-    expect(component.render(120).map((line) => line.trimEnd())).toEqual([
-      "⠋ thinking: xhigh · 4 tool uses",
-      "  ⎿  thinking…",
-    ]);
   });
 });
 
@@ -108,10 +95,11 @@ describe("AgentWidget", () => {
   }
 
   // "all" (and the no-policy constructor default) shows every agent.
-  it("shows foreground agents in 'all' mode (and by default)", () => {
-    const manager = { listAgents: () => [makeRecord("foreground", { isBackground: false })] };
-    expect(renderLines(manager, "foreground")).toContain("foreground description");
-    expect(renderLines(manager, "foreground", () => "all")).toContain("foreground description");
+  it("shows detached agents in 'all' and 'background' modes", () => {
+    const manager = { listAgents: () => [makeRecord("agent", { isBackground: true })] };
+    expect(renderLines(manager, "agent")).toContain("agent description");
+    expect(renderLines(manager, "agent", () => "all")).toContain("agent description");
+    expect(renderLines(manager, "agent", () => "background")).toContain("agent description");
   });
 
   it("hides nested children in every coordinator widget mode", () => {
@@ -132,9 +120,9 @@ describe("AgentWidget", () => {
     expect(renderLines(manager, "child", () => "background")).toBe("");
   });
 
-  it("excludes foreground agents in 'background' mode", () => {
-    const manager = { listAgents: () => [makeRecord("foreground", { isBackground: false })] };
-    expect(renderLines(manager, "foreground", () => "background")).toBe("");
+  it("keeps legacy unflagged agents visible in 'background' mode", () => {
+    const manager = { listAgents: () => [makeRecord("legacy", { isBackground: false })] };
+    expect(renderLines(manager, "legacy", () => "background")).toContain("legacy description");
   });
 
   // Also covers scheduler-spawned agents (isBackground=true, no `invocation`
@@ -147,8 +135,8 @@ describe("AgentWidget", () => {
     expect(lines).toContain("background description");
   });
 
-  // 'background' excludes only agents *known* to be foreground; one with no
-  // isBackground flag (e.g. a cross-extension RPC spawn) is kept, not hidden.
+  // One with no isBackground flag (e.g. a record from an older cross-extension
+  // RPC integration) is kept, not hidden.
   it("keeps agents with no isBackground flag in 'background' mode", () => {
     const manager = { listAgents: () => [makeRecord("unflagged", {})] };
     expect(renderLines(manager, "unflagged", () => "background")).toContain("unflagged description");

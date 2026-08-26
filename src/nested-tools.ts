@@ -25,7 +25,7 @@ import {
   streamToOutputFile,
   writeInitialEntry,
 } from "./output-file.js";
-import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
+import { getStatusNote, partialOutputSuffix } from "./status-note.js";
 import type {
   AgentConfig,
   AgentInvocation,
@@ -79,17 +79,13 @@ export interface NestedAgentManager {
   ): string;
   /** Resolves once the spawned agent is running; rejects on a startup failure. */
   awaitStartup(id: string): Promise<void>;
-  spawnAndWait(
-    pi: ExtensionAPI,
-    ctx: ExtensionContext,
-    type: string,
-    prompt: string,
-    options: Omit<NestedSpawnOptions, "isBackground">,
-    /** Fires synchronously after spawn, before the session exists — where the transcript is attached. */
-    onSpawned?: (id: string) => void,
-  ): Promise<{ id: string; record: AgentRecord }>;
   getRecord(id: string): AgentRecord | undefined;
-  resume(id: string, prompt: string, signal?: AbortSignal): Promise<AgentRecord | undefined>;
+  resume(
+    id: string,
+    prompt: string,
+    signal?: AbortSignal,
+    options?: { isBackground?: boolean },
+  ): Promise<AgentRecord | undefined>;
 }
 
 export interface NestedToolContext {
@@ -112,20 +108,7 @@ function ownsRecord(record: AgentRecord | undefined, parentAgentId: string): rec
   return record?.parentAgentId === parentAgentId;
 }
 
-/**
- * How the caller received this record, which decides the outcome wording.
- *
- *   - "inline": a foreground spawn or a resume. The full output is in this very
- *     result and no agent id was handed back, so the note must say there is
- *     nothing left to fetch — otherwise the parent invents an id, calls
- *     `get_subagent_result`, and hits "not owned by this parent" (#174, the same
- *     trap the top-level foreground path fell into).
- *   - "fetched": `get_subagent_result` on a background child. The parent holds a
- *     valid id and can poll again, so the background wording applies.
- */
-type ResultPosition = "inline" | "fetched";
-
-function formatRecord(record: AgentRecord, position: ResultPosition): string {
+function formatRecord(record: AgentRecord): string {
   if (record.status === "error") {
     return `Agent failed: ${record.error ?? "unknown error"}${partialOutputSuffix(record)}`;
   }
@@ -136,9 +119,7 @@ function formatRecord(record: AgentRecord, position: ResultPosition): string {
   // this in its result headline; a nested result has no headline, so the note
   // leads — appended, it would look like part of the child's own output.
   const text = record.result?.trim() || record.error?.trim() || "No output.";
-  const note = position === "inline"
-    ? getForegroundOutcomeNote(record.status)
-    : getStatusNote(record.status);
+  const note = getStatusNote(record.status);
   return note ? `Nested agent${note}.\n\n${text}` : text;
 }
 
@@ -172,7 +153,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       max_turns: Type.Optional(Type.Number({ minimum: 1 })),
       run_in_background: Type.Optional(
         Type.Boolean({
-          description: "Defaults to false for nested spawns — the call blocks and returns the child's result inline. Set true only for work you will collect later with get_subagent_result; a detached child is stopped when you finish.",
+          description: "Accepted for compatibility; nested agents always run in the background. Use get_subagent_result to collect the child's result before finishing.",
         }),
       ),
       resume: Type.Optional(Type.String({ description: "Resume a nested agent owned by this parent." })),
@@ -180,15 +161,20 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       inherit_context: Type.Optional(Type.Boolean()),
       ...isolationParam(isWorktreeIsolationEnabled()),
     }),
-    execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       if (params.resume) {
         const existing = context.manager.getRecord(params.resume);
         if (!ownsRecord(existing, context.parentAgentId)) {
           return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
         }
-        const resumed = await context.manager.resume(params.resume, params.prompt, signal);
+        const resumed = await context.manager.resume(params.resume, params.prompt, undefined, { isBackground: true });
         return resumed
-          ? textResult(formatRecord(resumed, "inline"), resumed.status === "error")
+          ? textResult(
+              resumed.status === "running" || resumed.status === "queued"
+                ? `Nested agent resumed in background. Agent ID: ${resumed.id}`
+                : formatRecord(resumed),
+              resumed.status === "error",
+            )
           : textResult(`Failed to resume nested agent "${params.resume}".`, true);
       }
 
@@ -222,11 +208,9 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       }
 
       const config = getAgentConfigIn(registry, resolvedType);
-      // Foreground regardless of `backgroundByDefault` — see the reasoning on
-      // ResolveOptions. An explicit `true` here still opts in.
       const invocation = resolveAgentInvocationConfig(config, params, {
         worktreeAllowed: isWorktreeIsolationEnabled(),
-        defaultRunInBackground: false,
+        defaultRunInBackground: true,
       });
       let model = ctx.model;
       if (invocation.modelInput) {
@@ -262,6 +246,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         isolated: invocation.isolated,
         inheritContext: invocation.inheritContext,
         thinkingLevel: invocation.thinking,
+        isBackground: true,
         isolation: invocation.isolation,
         invocation: {
           thinking: invocation.thinking,
@@ -333,29 +318,17 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       // report it as a tool error, like the top-level Agent tool does, instead of
       // letting it escape into the child's turn.
       try {
-        if (invocation.runInBackground) {
-          const id = context.manager.spawn(context.pi, ctx, resolvedType, params.prompt, {
-            ...options,
-            isBackground: true,
-          });
-          // Synchronous, before the event loop yields — onSessionCreated fires
-          // asynchronously inside runAgent, so the file is attached in time.
-          attachTranscript(id);
-          // Worktree isolation starts the agent asynchronously; surface its
-          // failure as a tool error, like the synchronous throw used to.
-          await context.manager.awaitStartup(id);
-          return textResult(`Nested agent started in background. Agent ID: ${id}`);
-        }
-
-        const { record } = await context.manager.spawnAndWait(
-          context.pi,
-          ctx,
-          resolvedType,
-          params.prompt,
-          { ...options, signal },
-          attachTranscript,
-        );
-        return textResult(formatRecord(record, "inline"), record.status === "error");
+        const id = context.manager.spawn(context.pi, ctx, resolvedType, params.prompt, {
+          ...options,
+          isBackground: true,
+        });
+        // Synchronous, before the event loop yields — onSessionCreated fires
+        // asynchronously inside runAgent, so the file is attached in time.
+        attachTranscript(id);
+        // Worktree isolation starts the agent asynchronously; surface its
+        // failure as a tool error rather than returning a misleading id.
+        await context.manager.awaitStartup(id);
+        return textResult(`Nested agent started in background. Agent ID: ${id}`);
       } catch (err) {
         return textResult(err instanceof Error ? err.message : String(err), true);
       }
@@ -385,7 +358,7 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         }
         if (record.promise) await abortable(record.promise, signal);
       }
-      return textResult(formatRecord(record, "fetched"), record.status === "error");
+      return textResult(formatRecord(record), record.status === "error");
     },
   });
 

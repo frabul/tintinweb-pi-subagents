@@ -264,9 +264,9 @@ describe("Agent tool — background resume wiring", () => {
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });
 
-  // Resume follows the same default as a fresh spawn — background — so
-  // foreground is now the explicit case rather than the implicit one.
-  it("still resumes in the foreground when run_in_background is false", async () => {
+  // Resume follows the same background-only contract as a fresh spawn; a legacy
+  // false flag cannot select the removed synchronous tool path.
+  it("ignores a legacy false flag and resumes in the background", async () => {
     const { pi, tools, lifecycle } = makePi();
     subagentsExtension(pi);
     const ctx = makeCtx(cwd);
@@ -281,9 +281,9 @@ describe("Agent tool — background resume wiring", () => {
       ctx,
     );
 
-    // Foreground resume returns the answer inline — no background handoff text.
-    expect(resultText(res)).toContain("inline answer");
-    expect(resultText(res)).not.toContain("You will be notified");
+    expect(resultText(res)).toContain("Agent ID:");
+    expect(resultText(res)).toContain("You will be notified");
+    expect(resultText(res)).not.toContain("inline answer");
 
     await lifecycle.get("session_shutdown")?.({}, ctx);
   });

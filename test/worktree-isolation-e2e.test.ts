@@ -63,10 +63,10 @@ function toolResultNames(context: Context): string[] {
     .map((m) => (m as { toolName?: string }).toolName ?? "");
 }
 
-/** Every Agent tool result the parent session received, concatenated. */
-function agentResultText(session: Context): string {
+/** Every result from the named tool the parent session received, concatenated. */
+function resultText(session: Context, toolName: string): string {
   return session.messages
-    .filter((m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent")
+    .filter((m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === toolName)
     .flatMap((m) => ((m.content ?? []) as Array<{ text?: string }>).map((b) => b.text ?? ""))
     .join("\n");
 }
@@ -87,15 +87,18 @@ function respondSpawning(isolation: "worktree" | undefined): (context: Context) 
       }
       return CHILD_MARKER;
     }
-    // Parent: spawn once, then echo the tool result so a lost one fails loudly.
-    if (toolResultNames(context).includes("Agent")) {
-      return `parent saw: ${agentResultText(context)}`;
+    // Parent: the Agent result is a handoff. Retrieve it by id before echoing
+    // the child's marker so a lost result fails loudly.
+    const results = toolResultNames(context);
+    const fetched = resultText(context, "get_subagent_result");
+    if (fetched) return `parent saw: ${fetched}`;
+    if (results.includes("Agent")) {
+      const handoff = resultText(context, "Agent");
+      const id = /Agent ID:\s*(\S+)/.exec(handoff)?.[1];
+      if (!id) throw new Error(`No agent ID in handoff: ${handoff}`);
+      return fauxToolCall("get_subagent_result", { agent_id: id, wait: true });
     }
     return agentCall({
-      // Foreground: this test reads the child's marker out of the parent's
-      // inline Agent tool result, which a background spawn replaces with a
-      // "started in background" receipt.
-      run_in_background: false,
       description: "worktree work",
       prompt: CHILD_PROMPT,
       ...(isolation ? { isolation } : {}),
@@ -134,7 +137,7 @@ describe("worktree isolation e2e (real git, real pi-mono, faux model)", () => {
     // saw the file. This is the guarantee; everything below is its bookkeeping.
     expect(existsSync(join(repo, MARKER_FILE))).toBe(false);
 
-    const result = agentResultText(run.parentSession);
+    const result = resultText(run.parentSession, "get_subagent_result");
     expect(result).toContain(CHILD_MARKER);
 
     // The result names a branch and the command to merge it — the only artifact,
@@ -174,7 +177,7 @@ describe("worktree isolation e2e (real git, real pi-mono, faux model)", () => {
       live: false,
     });
 
-    const result = agentResultText(run.parentSession);
+    const result = resultText(run.parentSession, "get_subagent_result");
     expect(result).toContain(CHILD_MARKER);
 
     // Ran in the main checkout: the file is right there, and no branch was made.

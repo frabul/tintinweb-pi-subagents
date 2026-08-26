@@ -100,7 +100,7 @@ describe("AgentManager — Bug 1 race condition (resultConsumed vs onComplete)",
     expect(completedRecord!.resultConsumed).toBeFalsy();
   });
 
-  it("onComplete IS called for foreground agents (lifecycle symmetry)", async () => {
+  it("onComplete IS called for synchronous coordinator runs (lifecycle symmetry)", async () => {
     let completedRecord: AgentRecord | undefined;
     manager = new AgentManager((r) => {
       completedRecord = r;
@@ -119,7 +119,7 @@ describe("AgentManager — Bug 1 race condition (resultConsumed vs onComplete)",
   });
 });
 
-describe("AgentManager — spawnAndWait onSpawned + foreground output file wiring (#105)", () => {
+describe("AgentManager — spawnAndWait onSpawned + coordinator output file wiring (#105)", () => {
   let manager: AgentManager;
   afterEach(() => manager?.dispose());
 
@@ -167,7 +167,7 @@ describe("AgentManager — spawnAndWait onSpawned + foreground output file wirin
     expect(spawnedId).toBe(id);
   });
 
-  it("restores the shared onSpawned callback before awaiting the foreground run", async () => {
+  it("restores the shared onSpawned callback before awaiting the coordinator run", async () => {
     manager = new AgentManager();
     let finishFirst: ((value: any) => void) | undefined;
     vi.mocked(runAgent)
@@ -495,7 +495,7 @@ describe("AgentManager — Bug 3 clearCompleted", () => {
   });
 
   it("clearCompleted does not remove running or queued agents", async () => {
-    // Use maxConcurrent=0 to keep agents queued, then spawn one running via foreground
+    // Use maxConcurrent=1 to keep the first agent running and queue the second
     manager = new AgentManager(undefined, 1);
 
     // Mock runAgent to never resolve (keeps agent "running")
@@ -832,7 +832,7 @@ describe("AgentManager — isolation: worktree fails loud, no silent fallback", 
     expect(runAgent).not.toHaveBeenCalled();
   });
 
-  it("a foreground spawn surfaces the same failure by rejecting spawnAndWait", async () => {
+  it("a synchronous coordinator surfaces the same failure by rejecting spawnAndWait", async () => {
     // The other half of the strict contract: the top-level Agent tool awaits
     // this call, and pi only marks a tool result failed when execute throws.
     const { createWorktree } = await import("../src/worktree.js");
@@ -1379,9 +1379,9 @@ describe("AgentManager — abort() state machine", () => {
   });
 });
 
-// Regression for #44: ESC during a foreground Agent call must propagate to
-// the child. Pi delivers parent abort via AbortSignal; the manager wires the
-// signal's "abort" event to this.abort(id).
+// Regression for #44: a parent abort must propagate to the child. Pi delivers
+// parent abort via AbortSignal; the manager wires the signal's "abort" event to
+// this.abort(id).
 describe("AgentManager — steer()", () => {
   let manager: AgentManager;
   afterEach(() => manager?.dispose());
@@ -2157,18 +2157,18 @@ describe("AgentManager — background resume", () => {
     expect(resumeAgent).not.toHaveBeenCalled();
   });
 
-  it("foreground resume is unchanged: awaits inline and does not fire onComplete", async () => {
+  it("synchronous coordinator resume awaits and does not fire onComplete", async () => {
     const onComplete = vi.fn();
     manager = new AgentManager(onComplete);
     const id = await spawnSettled(manager);
     onComplete.mockClear();
 
-    vi.mocked(resumeAgent).mockResolvedValue({ text: "inline result" } as any);
+    vi.mocked(resumeAgent).mockResolvedValue({ text: "synchronous result" } as any);
     const record = await manager.resume(id, "sync");
 
     expect(record?.status).toBe("completed");
-    expect(record?.result).toBe("inline result");
-    // Foreground resume returns its result inline and never notified (historical).
+    expect(record?.result).toBe("synchronous result");
+    // The coordinator resume returns its result directly and never notifies.
     expect(onComplete).not.toHaveBeenCalled();
   });
 

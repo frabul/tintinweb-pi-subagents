@@ -9,22 +9,49 @@
  * request. Each run pins `live: false` so the pre-publish smoke's global
  * `PI_E2E_LIVE=1` can't swap a real model in and turn this suite red.
  */
-import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { type Context, fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentCall,
+  type FauxReply,
   type PrintModeRun,
-  routeBySession,
   runPrintMode,
 } from "./helpers/print-mode-runner.js";
 
-/** Text of the parent's Agent tool result — what the orchestrator LLM sees. */
-function agentToolResult(session: AgentSession): string {
+/** Text of the retrieved result — what the orchestrator LLM sees after the handoff. */
+function retrievedResult(session: AgentSession): string {
   const msg = [...session.messages].reverse().find(
-    (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
+    (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "get_subagent_result",
   );
   return ((msg?.content ?? []) as Array<{ text?: string }>).map((b) => b.text ?? "").join("");
+}
+
+/** Drive a parent through the detached handoff before reading the child result. */
+function backgroundRoute(
+  description: string,
+  prompt: string,
+  subagent: (context: Context) => FauxReply,
+): (context: Context) => FauxReply {
+  return (context) => {
+    const isParent = (context.tools ?? []).some((tool) => tool.name === "Agent");
+    if (!isParent) return subagent(context);
+
+    const agentResult = [...context.messages].reverse().find(
+      (message) => message.role === "toolResult" && (message as { toolName?: string }).toolName === "Agent",
+    );
+    const fetched = [...context.messages].reverse().find(
+      (message) => message.role === "toolResult" && (message as { toolName?: string }).toolName === "get_subagent_result",
+    );
+    if (fetched) return "parent done";
+    if (agentResult) {
+      const text = ((agentResult.content ?? []) as Array<{ text?: string }>).map((block) => block.text ?? "").join("");
+      const id = /Agent ID:\s*(\S+)/.exec(text)?.[1];
+      if (!id) throw new Error(`No agent ID in handoff: ${text}`);
+      return fauxToolCall("get_subagent_result", { agent_id: id, wait: true });
+    }
+    return agentCall({ description, prompt });
+  };
 }
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -42,18 +69,16 @@ describe("issue #144 — empty-error final turns must not be 'completed'", () =>
   it("a run whose ONLY turn errors with no output is a failure, not an empty success", async () => {
     run = await runPrintMode({
       prompt: "Delegate.",
-      respond: routeBySession({
-        parentInitial: agentCall({ run_in_background: false, description: "doomed", prompt: "Do work." }),
-        parentFinal: "parent done",
+      respond: backgroundRoute("doomed", "Do work.",
         // The child's one and only turn: provider error, zero content.
-        subagent: () => fauxAssistantMessage([], { stopReason: "error", errorMessage: FATAL }),
-      }),
+        () => fauxAssistantMessage([], { stopReason: "error", errorMessage: FATAL }),
+      ),
       live: false,
     });
 
     // DESIRED: the orchestrator sees a failure naming the provider error —
     // not a clean success reading "No output.".
-    const toolResult = agentToolResult(run.parentSession);
+    const toolResult = retrievedResult(run.parentSession);
     expect(toolResult).toContain(FATAL);
     expect(toolResult).not.toContain("No output.");
   });
@@ -61,20 +86,16 @@ describe("issue #144 — empty-error final turns must not be 'completed'", () =>
   it("an earlier turn's text must not mask a failed final turn as a fresh success", async () => {
     run = await runPrintMode({
       prompt: "Delegate.",
-      respond: routeBySession({
-        parentInitial: agentCall({ run_in_background: false, description: "masked", prompt: "Do work." }),
-        parentFinal: "parent done",
-        subagent: (ctx) => {
-          const hasToolResult = ctx.messages.some((m) => m.role === "toolResult");
-          // Turn 1: real text + a tool call. Turn 2 (after the tool result):
-          // provider error with zero content.
-          return hasToolResult
-            ? fauxAssistantMessage([], { stopReason: "error", errorMessage: FATAL })
-            : fauxAssistantMessage([
-                fauxText("EARLIER-PARTIAL-TEXT"),
-                fauxToolCall("bash", { command: "echo hi" }),
-              ]);
-        },
+      respond: backgroundRoute("masked", "Do work.", (ctx) => {
+        const hasToolResult = ctx.messages.some((m) => m.role === "toolResult");
+        // Turn 1: real text + a tool call. Turn 2 (after the tool result):
+        // provider error with zero content.
+        return hasToolResult
+          ? fauxAssistantMessage([], { stopReason: "error", errorMessage: FATAL })
+          : fauxAssistantMessage([
+              fauxText("EARLIER-PARTIAL-TEXT"),
+              fauxToolCall("bash", { command: "echo hi" }),
+            ]);
       }),
       live: false,
     });
@@ -82,7 +103,7 @@ describe("issue #144 — empty-error final turns must not be 'completed'", () =>
     // The orchestrator sees the failure (not the earlier text as a clean
     // answer), AND the partial output is salvaged, clearly labeled as
     // pre-failure so it can't be mistaken for the final answer.
-    const toolResult = agentToolResult(run.parentSession);
+    const toolResult = retrievedResult(run.parentSession);
     expect(toolResult).toContain(FATAL);
     expect(toolResult).toContain("Partial output before the failure:");
     expect(toolResult).toContain("EARLIER-PARTIAL-TEXT");
@@ -93,15 +114,13 @@ describe("issue #144 — empty-error final turns must not be 'completed'", () =>
   it("a pure empty-error run shows no 'partial output' section", async () => {
     run = await runPrintMode({
       prompt: "Delegate.",
-      respond: routeBySession({
-        parentInitial: agentCall({ run_in_background: false, description: "empty", prompt: "Do work." }),
-        parentFinal: "parent done",
-        subagent: () => fauxAssistantMessage([], { stopReason: "error", errorMessage: FATAL }),
-      }),
+      respond: backgroundRoute("empty", "Do work.",
+        () => fauxAssistantMessage([], { stopReason: "error", errorMessage: FATAL }),
+      ),
       live: false,
     });
 
-    const toolResult = agentToolResult(run.parentSession);
+    const toolResult = retrievedResult(run.parentSession);
     expect(toolResult).toContain(FATAL);
     expect(toolResult).not.toContain("Partial output before the failure:");
   });

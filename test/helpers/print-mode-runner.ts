@@ -216,6 +216,26 @@ export function routeBySession(routes: {
       (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
     );
     if (spawned) {
+      // Detached Agent calls return a handoff. Retrieve the settled result before
+      // asking the parent for its final answer, just as an orchestrator should.
+      const retrieved = context.messages.some(
+        (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "get_subagent_result",
+      );
+      if (!retrieved) {
+        const handoff = [...context.messages].reverse().find(
+          (m) => m.role === "toolResult" && (m as { toolName?: string }).toolName === "Agent",
+        );
+        const content = (handoff as { content?: Array<{ type?: string; text?: string }> } | undefined)?.content;
+        const text = content?.map((block) => block.type === "text" ? block.text ?? "" : "").join("") ?? "";
+        const id = /Agent ID: ([^\s]+)/.exec(text)?.[1];
+        if (id) {
+          return fauxToolCall(
+            "get_subagent_result",
+            { agent_id: id, wait: true },
+            { id: "get-subagent-result" },
+          );
+        }
+      }
       return routes.parentFinal != null
         ? resolveReply(routes.parentFinal, context)
         : "Done.";
@@ -523,8 +543,8 @@ export async function runPrintMode(options: RunPrintModeOptions): Promise<PrintM
 
 /**
  * Extract the text of every `Agent` tool result in a session's history. This is
- * the real end-to-end observable: for a foreground spawn it contains the child's
- * own output; for a background spawn it's the "started in background" envelope.
+ * the real end-to-end observable: background-only spawns return a handoff
+ * envelope; a later result is delivered through notification or retrieval.
  */
 export function agentToolResults(session: AgentSession): string[] {
   return toolResultsNamed(session, "Agent");
@@ -550,9 +570,9 @@ export function toolResultsNamed(session: AgentSession, toolName: string): strin
 
 /**
  * All text across the whole conversation — assistant turns, user/nudge messages,
- * and every tool result. Use this to assert a child's output *materialized
- * somewhere* (a foreground tool result, a get_subagent_result result, a held
- * nudge), rather than only in the parent's final message which may summarize it.
+ * and every tool result. Use this to assert a child's output materialized
+ * somewhere (a get_subagent_result result or a held notification), rather than
+ * only in the parent's final message which may summarize it.
  */
 export function conversationText(session: AgentSession): string {
   const parts: string[] = [];
@@ -580,7 +600,7 @@ export function invokedToolNames(session: AgentSession): string[] {
 
 /**
  * The arguments of every `Agent` tool call the model actually made — lets a live
- * smoke assert which feature was exercised (e.g. `run_in_background`,
+ * smoke assert which feature was exercised (e.g. legacy `run_in_background`,
  * `subagent_type`) rather than just that *some* spawn happened.
  */
 export function agentToolCalls(session: AgentSession): Array<Record<string, unknown>> {

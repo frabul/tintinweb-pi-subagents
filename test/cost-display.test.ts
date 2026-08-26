@@ -5,8 +5,8 @@
  * Two rules run through all of it. A cost is shown only when there is one to
  * show: a model pi has no rates for reports 0, and printing `$0.00` beside its
  * tokens would claim the run was measured and free. And each surface punctuates
- * its own — the stats line joins with `·`, the foreground result with `,`, the
- * `get_subagent_result` header with `|` — which is why the cost travels as a
+ * its own — the widget stats line joins with `·`, while the
+ * `get_subagent_result` header uses `|` — which is why the cost travels as a
  * number and is formatted at the end, not baked into the token string.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,11 +19,11 @@ vi.mock("../src/agent-runner.js", async () => {
 import { runAgent } from "../src/agent-runner.js";
 import { registerAgents } from "../src/agent-types.js";
 import subagentsExtension from "../src/index.js";
-import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+import { ctx, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
 
 const COST = 0.0123;
 
-/** One foreground run that spends `cost` on a single assistant message. */
+/** One detached run that spends `cost` on a single assistant message. */
 function runSpending(cost: number) {
   vi.mocked(runAgent).mockImplementation(async (_c: any, _t: any, _p: any, opts: any) => {
     opts.onAssistantUsage?.({ input: 1000, output: 200, cacheWrite: 0, cost });
@@ -34,9 +34,18 @@ function runSpending(cost: number) {
 const spawn = (tools: Map<string, any>) =>
   tools.get("Agent").execute(
     "tc-1",
-    { prompt: "go", description: "spend", subagent_type: "general-purpose", run_in_background: false },
+    { prompt: "go", description: "spend", subagent_type: "general-purpose" },
     undefined, undefined, ctx(),
   );
+
+async function resultText(tools: Map<string, any>, started: unknown): Promise<string> {
+  const id = /Agent ID:\s*(\S+)/.exec(textOf(started))?.[1];
+  if (!id) throw new Error(`No agent ID in handoff: ${textOf(started)}`);
+  const result = await tools.get("get_subagent_result").execute(
+    "tc-2", { agent_id: id, wait: true }, undefined, undefined, ctx(),
+  );
+  return textOf(result);
+}
 
 describe("cost display", () => {
   let hermetic: Hermetic;
@@ -58,31 +67,31 @@ describe("cost display", () => {
     hermetic?.restore();
   });
 
-  describe("the foreground result the orchestrator reads", () => {
+  describe("the result retrieval surface", () => {
     it("names the cost in the stats it already reports", async () => {
       const { tools } = boot({ showCost: true });
       runSpending(COST);
 
-      const text = textOf(await spawn(tools));
+      const text = await resultText(tools, await spawn(tools));
 
       expect(text).toContain("~$0.0123");
-      // Comma-joined with the rest, not glued to the token count with the "·"
-      // that the widget uses — the separator belongs to the surface.
-      expect(text).toMatch(/1\.2k token, ~\$0\.0123/);
+      // The result header uses labelled pipe-separated fields, while the widget
+      // uses middle dots — the separator belongs to the surface.
+      expect(text).toMatch(/1\.2k tokens? \| Cost: ~\$0\.0123/);
     });
 
     it("says nothing when the setting is off", async () => {
       const { tools } = boot({ showCost: false });
       runSpending(COST);
 
-      expect(textOf(await spawn(tools))).not.toContain("$");
+      expect(await resultText(tools, await spawn(tools))).not.toContain("$");
     });
 
     it("says nothing for a model with no pricing data", async () => {
       const { tools } = boot({ showCost: true });
       runSpending(0);
 
-      const text = textOf(await spawn(tools));
+      const text = await resultText(tools, await spawn(tools));
       expect(text).toContain("1.2k token");   // tokens are still exact
       expect(text).not.toContain("$");
     });
@@ -92,14 +101,8 @@ describe("cost display", () => {
     it("reports the cost as its own labelled field", async () => {
       const { tools } = boot({ showCost: true });
       runSpending(COST);
-      await spawn(tools);
-      await flush();
 
-      // The agent above ran in the foreground; look it up by the handle its
-      // type gets, which is how the orchestrator would reach it.
-      const text = textOf(await tools.get("get_subagent_result").execute(
-        "tc-2", { agent_id: "general-purpose" }, undefined, undefined, ctx(),
-      ));
+      const text = await resultText(tools, await spawn(tools));
 
       // Pipe-separated `Label: value` fields, matching its neighbours.
       expect(text).toContain("Cost: ~$0.0123");
@@ -108,12 +111,8 @@ describe("cost display", () => {
     it("omits the field entirely when unpriced", async () => {
       const { tools } = boot({ showCost: true });
       runSpending(0);
-      await spawn(tools);
-      await flush();
 
-      const text = textOf(await tools.get("get_subagent_result").execute(
-        "tc-2", { agent_id: "general-purpose" }, undefined, undefined, ctx(),
-      ));
+      const text = await resultText(tools, await spawn(tools));
 
       expect(text).not.toContain("Cost:");
     });
@@ -135,7 +134,7 @@ describe("cost display", () => {
     const spawnBackground = (tools: Map<string, any>) =>
       tools.get("Agent").execute(
         "tc-1",
-        { prompt: "go", description: "spend", subagent_type: "general-purpose", run_in_background: true },
+        { prompt: "go", description: "spend", subagent_type: "general-purpose" },
         undefined, undefined, ctx(),
       );
 
