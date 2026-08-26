@@ -40,8 +40,9 @@ function bootedCtx() {
  */
 async function scheduleAndReadBack(
   params: Record<string, unknown>,
+  agentFiles?: Record<string, string>,
 ): Promise<{ job: ScheduledSubagent; reply: string; restore: () => void }> {
-  const hermetic = hermeticDir();
+  const hermetic = hermeticDir(agentFiles ? { agentFiles } : {});
   const { pi, tools, lifecycle } = makePi();
   subagentsExtension(pi);
 
@@ -67,12 +68,18 @@ async function scheduleAndReadBack(
 
 describe("Agent tool → persisted scheduled job", () => {
   it("persists the run-shaping params the job will fire with", async () => {
-    const { job, restore } = await scheduleAndReadBack({
-      subagent_type: "general-purpose",
-      thinking: "high",
-      isolated: true,
-      isolation: "worktree",
-    });
+    const { job, restore } = await scheduleAndReadBack(
+      {
+        subagent_type: "wt",
+        thinking: "high",
+        isolated: true,
+      },
+      // Worktree isolation is frontmatter-only, so the persisted job isolation
+      // has to come from the agent file rather than a tool parameter.
+      {
+        wt: `---\ndescription: Worktree agent\nisolation: worktree\n---\n\nWork in a worktree.`,
+      },
+    );
     try {
       expect(job.thinking).toBe("high");
       expect(job.isolated).toBe(true);

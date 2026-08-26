@@ -588,9 +588,9 @@ export class AgentManager {
     // Worktree isolation: try to create a temporary git worktree. Strict —
     // fail loud if not possible (no silent fallback to main tree). Done BEFORE
     // the run is kicked off so a failure doesn't leave a half-running agent.
-    // The project switch is enforced here as well as at the tool boundary
-    // because cross-extension RPC forwards its options unvalidated — a schema
-    // that omits the field can't stop a caller that never saw the schema.
+    // The project switch is enforced here as well as at the resolver because
+    // cross-extension RPC forwards its options unvalidated — only a check at
+    // the spawn boundary can refuse a worktree on every path.
     let worktreeCwd: string | undefined;
     if (options.isolation === "worktree" && isWorktreeIsolationEnabled()) {
       const wt = await createWorktree(pi, baseCwd, id);

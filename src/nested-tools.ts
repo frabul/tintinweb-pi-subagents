@@ -16,7 +16,7 @@ import {
   resolveTypeIn,
 } from "./agent-types.js";
 import { loadCustomAgents } from "./custom-agents.js";
-import { isolationParam, resolveAgentInvocationConfig } from "./invocation-config.js";
+import { resolveAgentInvocationConfig } from "./invocation-config.js";
 import { resolveModel } from "./model-resolver.js";
 import { checkModelScope } from "./model-scope.js";
 import {
@@ -159,7 +159,6 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
       resume: Type.Optional(Type.String({ description: "Resume a nested agent owned by this parent." })),
       isolated: Type.Optional(Type.Boolean()),
       inherit_context: Type.Optional(Type.Boolean()),
-      ...isolationParam(isWorktreeIsolationEnabled()),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       if (params.resume) {

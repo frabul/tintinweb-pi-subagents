@@ -1067,9 +1067,10 @@ describe("AgentManager — onBeforeWorktreeCleanup", () => {
   });
 });
 
-// The project switch has to bite below the tool boundary: cross-extension RPC
-// forwards its options straight to spawn(), so a schema that omits the
-// isolation parameter can't stop a caller that never saw the schema (#184).
+// The project switch has to bite below the resolver: cross-extension RPC
+// forwards its options straight to spawn(), so only the manager gate can
+// refuse a worktree for a frontmatter agent whose options never passed through
+// resolveAgentInvocationConfig.
 describe("AgentManager — worktreeIsolation: false refuses worktrees", () => {
   let manager: AgentManager;
 

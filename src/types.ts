@@ -20,15 +20,11 @@ export type MemoryScope = "user" | "project" | "local";
 /**
  * Isolation mode for agent execution.
  *
- * `"off"` exists for the caller's benefit, not the runtime's: models that fill
- * every optional parameter had no legal way to decline a single-value
- * `isolation` field and kept spawning worktrees they had just reasoned their
- * way out of (#231, #184). It is an input spelling only —
- * `resolveAgentInvocationConfig` collapses it to `undefined`, so nothing
- * downstream sees a value other than `"worktree"`. In an agent file it is a
- * genuine veto, since agent config outranks tool-call params.
+ * Configured exclusively in agent frontmatter — the Agent tool has no
+ * `isolation` parameter. Only `"worktree"` opts in; anything else or an
+ * absent field means no worktree.
  */
-export type IsolationMode = "worktree" | "off";
+export type IsolationMode = "worktree";
 
 /** Unified agent configuration — used for both default and user-defined agents. */
 export interface AgentConfig {
@@ -76,8 +72,8 @@ export interface AgentConfig {
   /** Persistent memory scope — agents with memory get a persistent directory and MEMORY.md */
   memory?: MemoryScope;
   /**
-   * Isolation mode — "worktree" runs the agent in a temporary git worktree,
-   * "off" refuses one even when the caller asks (frontmatter outranks params).
+   * Isolation mode — "worktree" runs the agent in a temporary git worktree.
+   * Configured exclusively in agent frontmatter.
    */
   isolation?: IsolationMode;
   /** true = this is an embedded default agent (informational) */

@@ -71,6 +71,19 @@ function resultText(session: Context, toolName: string): string {
     .join("\n");
 }
 
+/** A custom agent file that requests worktree isolation via frontmatter. */
+const WORKTREE_AGENT = `---
+description: Worktree isolation agent
+isolation: worktree
+---
+
+Work only inside the isolated git worktree copy you are given.`;
+
+function writeWorktreeAgent(repo: string): void {
+  mkdirSync(join(repo, ".pi", "agents"), { recursive: true });
+  writeFileSync(join(repo, ".pi", "agents", "wt-agent.md"), WORKTREE_AGENT);
+}
+
 /**
  * One responder for both sessions, split on the first user message.
  *
@@ -79,7 +92,7 @@ function resultText(session: Context, toolName: string): string {
  * tools resolve against, and writing the file from the test would answer it by
  * assumption.
  */
-function respondSpawning(isolation: "worktree" | undefined): (context: Context) => FauxReply {
+function respondSpawning(subagentType: string): (context: Context) => FauxReply {
   return (context: Context): FauxReply => {
     if (firstUserText(context).includes(CHILD_PROMPT)) {
       if (!toolResultNames(context).includes("bash")) {
@@ -101,7 +114,7 @@ function respondSpawning(isolation: "worktree" | undefined): (context: Context) 
     return agentCall({
       description: "worktree work",
       prompt: CHILD_PROMPT,
-      ...(isolation ? { isolation } : {}),
+      subagent_type: subagentType,
     });
   };
 }
@@ -125,11 +138,12 @@ describe("worktree isolation e2e (real git, real pi-mono, faux model)", () => {
   it("runs the child in the copy and lands its changes on a branch, not the main checkout", async () => {
     const repo = initGitRepo();
     repos.push(repo);
+    writeWorktreeAgent(repo);
 
     run = await runPrintMode({
       prompt: "Delegate the work.",
       cwd: repo,
-      respond: respondSpawning("worktree"),
+      respond: respondSpawning("wt-agent"),
       live: false,
     });
 
@@ -159,10 +173,11 @@ describe("worktree isolation e2e (real git, real pi-mono, faux model)", () => {
     repos.push(repo);
     mkdirSync(join(repo, ".pi"), { recursive: true });
     writeFileSync(join(repo, ".pi", "subagents.json"), JSON.stringify({ worktreeIsolation: false }));
+    writeWorktreeAgent(repo);
 
-    // The caller passes `isolation: "worktree"` even though the setting drops
-    // the parameter from the schema — exactly what a model holding a cached tool
-    // spec does, and the case the downgrade (rather than a throw) exists for.
+    // The agent's frontmatter requests `isolation: worktree` even though the
+    // project disabled worktrees — exactly the case the downgrade (rather than
+    // a throw) exists for.
     //
     // Mutation note: the resolver gate (invocation-config) and the manager gate
     // (agent-manager) are redundant on THIS path, so removing either one alone
@@ -173,7 +188,7 @@ describe("worktree isolation e2e (real git, real pi-mono, faux model)", () => {
     run = await runPrintMode({
       prompt: "Delegate the work.",
       cwd: repo,
-      respond: respondSpawning("worktree"),
+      respond: respondSpawning("wt-agent"),
       live: false,
     });
 
@@ -185,8 +200,7 @@ describe("worktree isolation e2e (real git, real pi-mono, faux model)", () => {
     expect(git(repo, "branch", "--list", "pi-agent-*")).toBe("");
     expect(git(repo, "worktree", "list").split("\n")).toHaveLength(1);
 
-    // Silent by design — no per-result note, which is why the tool description
-    // drops the isolation bullet alongside the parameter (see index.ts).
+    // Silent by design — no per-result note (see index.ts).
     expect(result).not.toContain("Changes saved to branch");
   });
 });

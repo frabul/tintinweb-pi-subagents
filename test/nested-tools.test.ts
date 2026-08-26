@@ -292,7 +292,6 @@ describe("child-safe nested Agent tools", () => {
       description: "find files",
       prompt: "Find them",
       run_in_background: true,
-      isolation: "worktree",
     });
 
     expect(result.isError).toBe(true);
