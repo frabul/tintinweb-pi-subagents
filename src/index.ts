@@ -204,6 +204,7 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
     // be stuck with the old answer.
     totalCost: getLifetimeCost(record.lifetimeUsage),
     durationMs: record.completedAt ? record.completedAt - record.startedAt : 0,
+    compactionCount: record.compactionCount,
     outputFile: record.outputFile,
     error: record.error,
     resultPreview: record.result
@@ -335,6 +336,7 @@ export default function (pi: ExtensionAPI) {
           if (costText) parts.push(costText);
         }
         if (d.durationMs > 0) parts.push(formatMs(d.durationMs));
+        if (d.compactionCount) parts.push(`${d.compactionCount} compaction${d.compactionCount === 1 ? "" : "s"}`);
         if (parts.length) {
           line += "\n  " + parts.map(p => theme.fg("dim", p)).join(" " + theme.fg("dim", "·") + " ");
         }
@@ -474,7 +476,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   // ---- Individual nudge helper (async join mode) ----
-  function emitIndividualNudge(record: AgentRecord) {
+  function emitIndividualNudge(record: AgentRecord, activity?: AgentActivity) {
     if (record.resultConsumed) return;  // re-check at send time
 
     const notification = formatTaskNotification(record, 500, showCost);
@@ -484,21 +486,23 @@ export default function (pi: ExtensionAPI) {
       customType: "subagent-notification",
       content: notification + footer,
       display: true,
-      details: buildNotificationDetails(record, 500, agentActivity.get(record.id)),
+      details: buildNotificationDetails(record, 500, activity ?? agentActivity.get(record.id)),
     }, { deliverAs: "followUp", triggerTurn: true });
   }
 
   function sendIndividualNudge(record: AgentRecord) {
+    const activity = agentActivity.get(record.id);
     agentActivity.delete(record.id);
     widget.markFinished(record.id);
     fleet.onAgentFinished(record.id);
-    scheduleNudge(record.id, () => emitIndividualNudge(record));
+    scheduleNudge(record.id, () => emitIndividualNudge(record, activity));
     widget.update();
   }
 
   // ---- Group join manager ----
   const groupJoin = new GroupJoinManager(
     (records, partial) => {
+      const activitySnap = new Map(records.map(r => [r.id, agentActivity.get(r.id)] as const));
       for (const r of records) { agentActivity.delete(r.id); widget.markFinished(r.id); fleet.onAgentFinished(r.id); }
 
       const groupKey = `group:${records.map(r => r.id).join(",")}`;
@@ -513,9 +517,9 @@ export default function (pi: ExtensionAPI) {
           : `${unconsumed.length} agent(s) finished`;
 
         const [first, ...rest] = unconsumed;
-        const details = buildNotificationDetails(first, 300, agentActivity.get(first.id));
+        const details = buildNotificationDetails(first, 300, activitySnap.get(first.id));
         if (rest.length > 0) {
-          details.others = rest.map(r => buildNotificationDetails(r, 300, agentActivity.get(r.id)));
+          details.others = rest.map(r => buildNotificationDetails(r, 300, activitySnap.get(r.id)));
         }
 
         pi.sendMessage<NotificationDetails>({
