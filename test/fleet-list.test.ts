@@ -483,7 +483,20 @@ describe("FleetList rendering", () => {
 });
 
 describe("FleetList overlay lifecycle", () => {
-  it("Enter on 'main' just deactivates (no overlay)", () => {
+  it("Enter on 'main' passes through to submit (does not merely dismiss)", () => {
+    const h = harness([makeRecord()]);
+    h.press(DOWN); // active, index 0 (main)
+    // Enter on `main` must reach the editor (submit), not be swallowed by the
+    // list. This is the regression: a user whose shift+enter is a plain Enter
+    // (kitty protocol delivers it that way) lost their submit key whenever the
+    // list happened to be active — i.e. right after pressing ↓ at an empty
+    // prompt — so submit stopped working "after some random time".
+    expect(h.press(ENTER)).toBeUndefined();
+    expect(h.overlayOpened()).toBe(false); // never opened an overlay
+    expect(h.render().some(l => l.includes("← for agents"))).toBe(true); // back to inactive
+  });
+
+  it("Enter on 'main' just deactivates (no overlay) — regression guard", () => {
     const h = harness([makeRecord()]);
     h.press(DOWN); // active, index 0 (main)
     h.press(ENTER);
