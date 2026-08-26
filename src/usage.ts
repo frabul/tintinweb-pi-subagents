@@ -132,7 +132,7 @@ export class PendingUsagePool {
 /** Minimal shape we read from upstream `getSessionStats()`. */
 export type SessionStatsLike = {
   tokens: { input: number; output: number; cacheWrite: number; cacheRead?: number };
-  contextUsage?: { percent: number | null };
+  contextUsage?: { percent: number | null; tokens?: number | null; contextWindow?: number };
 };
 export type SessionLike = { getSessionStats(): SessionStatsLike };
 
@@ -158,7 +158,6 @@ export function getSessionTokens(session: SessionLike | undefined): number {
     return Math.round(3 * t.output + t.input + 0.2 * (t.cacheRead ?? 0) + t.cacheWrite);
   } catch { return 0; }
 }
-
 /**
  * Context-window utilization (0–100), or null when unavailable
  * (no model contextWindow, or post-compaction before the next response).
@@ -167,4 +166,17 @@ export function getSessionContextPercent(session: SessionLike | undefined): numb
   if (!session) return null;
   try { return session.getSessionStats().contextUsage?.percent ?? null; }
   catch { return null; }
+}
+
+/**
+ * Current context-window length in estimated tokens, or 0 when unknown (no
+ * model contextWindow, or post-compaction before the next response). 0 means
+ * "unknown", never "empty" — limit enforcement reads it as "skip this turn".
+ */
+export function getSessionContextLength(session: SessionLike | undefined): number {
+  if (!session) return 0;
+  try {
+    const tokens = session.getSessionStats().contextUsage?.tokens;
+    return typeof tokens === "number" && tokens > 0 ? tokens : 0;
+  } catch { return 0; }
 }

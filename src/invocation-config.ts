@@ -4,6 +4,7 @@ interface AgentInvocationParams {
   model?: string;
   thinking?: string;
   max_turns?: number;
+  max_context_length?: number;
   run_in_background?: boolean;
   inherit_context?: boolean;
   isolated?: boolean;
@@ -35,6 +36,7 @@ export function resolveAgentInvocationConfig(
   modelFromParams: boolean;
   thinking?: ThinkingLevel;
   maxTurns?: number;
+  maxContextLength?: number;
   inheritContext: boolean;
   runInBackground: boolean;
   isolated: boolean;
@@ -47,8 +49,9 @@ export function resolveAgentInvocationConfig(
    * is an explicit override and wins over the agent file's default, so there is
    * no caller model that can be reported as ignored.
    *
-   * `max_turns` is deliberately absent: no surface renders a requested-vs-
-   * effective turn limit, so recording one would be dead data.
+   * `max_turns` and `max_context_length` are deliberately absent: no surface
+   * renders a requested-vs-effective limit for either, so recording one would
+   * be dead data.
    */
   overridden?: { thinking?: ThinkingLevel };
 } {
@@ -83,6 +86,9 @@ export function resolveAgentInvocationConfig(
     modelFromParams: rawModel != null,
     thinking: (agentConfig?.thinking ?? rawThinking) as ThinkingLevel | undefined,
     maxTurns: agentConfig?.maxTurns ?? params.max_turns,
+    // Per-call only — there is no frontmatter `max_context_length` field, so
+    // the parameter is the sole source (the project default applies later).
+    maxContextLength: params.max_context_length,
     inheritContext: agentConfig?.inheritContext ?? rawInheritContext ?? false,
     // Retain the resolved field for invocation snapshots and older callers,
     // but never allow configuration or legacy options to select inline work.

@@ -156,6 +156,40 @@ describe("status note reaches the parent through the real handlers", () => {
     // framing remain available without claiming the preview is complete.
     expect(out).not.toContain("everything the agent produced is above");
   });
+
+  it("a context-limit abort reaches the parent named as context, not turns", async () => {
+    // The record's limitReason travels through the real notification path, so
+    // the parent sees *which* limit aborted the run — the context note
+    // instead of the default turn-limit wording.
+    vi.mocked(runAgent).mockResolvedValue({
+      responseText: "partial output",
+      session: { dispose: vi.fn() } as any,
+      aborted: true,
+      steered: false,
+      limitReason: "context",
+    });
+    const { pi, tools } = makePi();
+    subagentsExtension(pi);
+
+    await tools.get("Agent").execute(
+      "tc-ctx-abort",
+      { prompt: "go", description: "ctx", subagent_type: "general-purpose" },
+      undefined, undefined, ctx(),
+    );
+    // Completion nudges are debounced (a batch hold window plus NUDGE_HOLD_MS);
+    // poll for it instead of racing a fixed sleep.
+    let notification: any;
+    const deadline = Date.now() + 2000;
+    while (!notification && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      notification = pi.sendMessage.mock.calls.find((c: any[]) => c[0]?.customType === "subagent-notification");
+    }
+    expect(notification, "a completion notification should have been sent").toBeDefined();
+    expect(notification![0].content).toContain("hit the context length limit");
+    expect(notification![0].content).not.toContain("turn limit");
+    expect(notification![0].details.limitReason).toBe("context");
+    expect(notification![0].details.status).toBe("aborted");
+  });
 });
 
 // `subagents:compacted` is a documented cross-extension contract (README:495)

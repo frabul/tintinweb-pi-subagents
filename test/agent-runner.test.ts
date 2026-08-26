@@ -2743,3 +2743,73 @@ describe("resolveDefaultModel", () => {
     expect(resolveDefaultModel(undefined, registry([haiku]), undefined)).toBeUndefined();
   });
 });
+
+
+describe("agent-runner context-length enforcement", () => {
+  // The context cap is enforced inside runAgent's turn_end subscription from
+  // the session's own context-length estimate: steer at the soft limit, hard
+  // abort once the grace slack is exceeded, and skip entirely while the
+  // length is unknown (0). These tests drive the captured listener directly,
+  // like a real session firing turn_end events between prompt() calls.
+  function sessionAt(tokens: number | undefined) {
+    const { session, listeners } = createSession("done");
+    if (tokens !== undefined) {
+      (session as any).getSessionStats = vi.fn(() => ({
+        contextUsage: { percent: 70, tokens, contextWindow: 200_000 },
+      }));
+    }
+    // The enforcement subscription is registered inside runAgent; capture the
+    // listener lazily so prompt() sees it (listeners[0] = turn tracking).
+    (session.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      const emit = listeners[0] as (event: any) => void;
+      emit({ type: "turn_end" });
+      emit({ type: "turn_end" });
+    });
+    return session;
+  }
+
+  it("soft-steers at the context limit and reports limitReason 'context'", async () => {
+    const session = sessionAt(125_000); // ctxLen >= limit on the first turn_end
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "Say CONTEXT", { pi, maxContextLength: 125_000 });
+
+    expect(session.steer).toHaveBeenCalledTimes(1);
+    expect(session.steer).toHaveBeenCalledWith(expect.stringContaining("context length limit"));
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(result.steered).toBe(true);
+    expect(result.aborted).toBe(false);
+    expect(result.limitReason).toBe("context");
+  });
+
+  it("hard-aborts once the context exceeds the limit by the grace slack", async () => {
+    const session = sessionAt(140_000); // >= 125k limit, and >= 125k + 15k grace
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "Say CONTEXT", { pi, maxContextLength: 125_000 });
+
+    // Turn 1 crossed the soft limit (steer); turn 2 crossed limit + grace.
+    expect(session.steer).toHaveBeenCalledTimes(1);
+    expect(session.abort).toHaveBeenCalledTimes(1);
+    expect(result.aborted).toBe(true);
+    expect(result.steered).toBe(true);
+    expect(result.limitReason).toBe("context");
+  });
+
+  it("skips enforcement while the context length is unknown (0)", async () => {
+    // No getSessionStats at all — getSessionContextLength reports 0 (unknown,
+    // e.g. no model context window or right after a compaction), so the cap
+    // must not steer or abort against an unmeasured context.
+    const session = sessionAt(undefined);
+    createAgentSession.mockResolvedValue({ session });
+
+    const result = await runAgent(ctx, "Explore", "Say NOCTX", { pi, maxContextLength: 1000 });
+
+    expect(session.steer).not.toHaveBeenCalled();
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(result.steered).toBe(false);
+    expect(result.aborted).toBe(false);
+    expect(result.limitReason).toBeUndefined();
+  });
+});
+

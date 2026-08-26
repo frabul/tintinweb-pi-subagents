@@ -119,7 +119,7 @@ function formatRecord(record: AgentRecord): string {
   // this in its result headline; a nested result has no headline, so the note
   // leads — appended, it would look like part of the child's own output.
   const text = record.result?.trim() || record.error?.trim() || "No output.";
-  const note = getStatusNote(record.status);
+  const note = getStatusNote(record.status, record.limitReason);
   return note ? `Nested agent${note}.\n\n${text}` : text;
 }
 

@@ -62,7 +62,7 @@ One of these already shipped as a bug in this project's own README example, so i
 | `isolated: true` | Disables extensions, skills and nested tools | `isolation: "worktree"` for a git worktree |
 | `isolation: "worktree"` | Creates a git worktree | `isolated: true` to strip capabilities |
 | `configCwd` | Stripped | `cwd` |
-| `max_turns` / `thinking` / `inherit_context` | Ignored — tool and frontmatter spellings | `maxTurns` / `thinkingLevel` / `inheritContext` |
+| `max_turns` / `max_context_length` / `thinking` / `inherit_context` | Ignored — tool (and frontmatter) spellings | `maxTurns` / `maxContextLength` / `thinkingLevel` / `inheritContext` |
 | `memory` | Nothing. **There is no such option** | Memory scope comes only from the agent definition's frontmatter |
 
 **None of these produce an error.** Option keys are not validated on this path at all — unknown ones are accepted and dropped. (Contrast `agent()` inside a [workflow](workflows.md), which rejects unknown keys by name.)
