@@ -353,7 +353,20 @@ export class FleetList {
       return { consume: true };
     }
     if (matchesKey(data, "escape")) { this.deactivate(); return { consume: true }; }
-    if (matchesKey(data, Key.enter)) { this.openSelected(); return { consume: true }; }
+    if (matchesKey(data, Key.enter)) {
+      // `main` is the prompt itself: let Enter submit instead of merely
+      // dismissing the list. Otherwise the list swallows the user's submit key
+      // whenever it happens to be active — e.g. right after a ↓ at an empty
+      // prompt, where `main` is the default selection. Under the kitty protocol
+      // shift+enter arrives as a plain Enter, so this is what made submit stop
+      // working "after some random time". Any other row still opens on Enter.
+      if (this.selectedIndex === 0) {
+        this.deactivate();
+        return undefined;
+      }
+      this.openSelected();
+      return { consume: true };
+    }
 
     // Any other key cancels navigation and flows to the editor.
     this.deactivate();
@@ -381,8 +394,8 @@ export class FleetList {
 
   private openSelected(): void {
     const entry = this.roster()[this.selectedIndex];
-    if (!entry || entry.kind === "main") {
-      // `main` = return to the prompt; the native transcript is already shown.
+    if (!entry) {
+      // Selection fell outside the roster (shouldn't happen, but stay safe).
       this.deactivate();
       return;
     }
@@ -395,6 +408,11 @@ export class FleetList {
         () => this.clearViewer(),
         () => this.clearViewer(),
       );
+      return;
+    }
+    if (entry.kind !== "agent") {
+      // Only `main` reaches here (defensive: handleKey routes index 0 to submit).
+      this.deactivate();
       return;
     }
     const record = entry.record;
