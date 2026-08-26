@@ -42,6 +42,7 @@ export const SUBAGENT_TOOL_NAMES = {
   WORKFLOW: "SubagentWorkflow",
   GET_RESULT: "get_subagent_result",
   STEER: "steer_subagent",
+  AGENT_INFO: "agent_info",
 } as const;
 
 /** Names of tools registered by this extension that subagents must NOT inherit. */

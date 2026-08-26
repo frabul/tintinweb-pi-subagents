@@ -95,21 +95,23 @@ describe("toolDescriptionMode", () => {
   it("defaults to the full description", () => {
     const tools = setup();
     const desc: string = tools.get("Agent").description;
-    expect(desc).toContain("## Usage notes");
+    expect(desc).toContain("## Guidelines");
     expect(desc).toContain("## Writing the prompt");
-    // Full agent descriptions are embedded (a late Explore sentence survives).
-    expect(desc).toContain("very thorough");
+    // The full description points at agent_info for details instead of
+    // embedding the roster (context-bloat reduction).
+    expect(desc).toContain("agent_info('list')");
+    expect(desc).not.toContain("- general-purpose:");
   });
 
-  it("compact mode swaps in the short description with one-line type list", () => {
+  it("compact mode swaps in the lean pointer-to-agent_info description", () => {
     const tools = setup({ toolDescriptionMode: "compact" });
     const desc: string = tools.get("Agent").description;
-    expect(desc).toContain("Launch an autonomous agent");
-    expect(desc).not.toContain("## Usage notes");
+    expect(desc).toContain("Launch an autonomous sub-agent");
+    expect(desc).toContain("MUST call `agent_info('list')` to get available agents");
+    expect(desc).not.toContain("## Guidelines");
     expect(desc).not.toContain("## Writing the prompt");
-    // Type list keeps every agent but only the first sentence of each description.
-    expect(desc).toContain("- general-purpose:");
-    expect(desc).toContain("- Explore: Fast read-only search agent for locating code. (Tools:");
+    // No embedded roster — the model pulls types/tools via agent_info('list').
+    expect(desc).not.toContain("- general-purpose:");
     expect(desc).not.toContain("very thorough");
     // The point of the feature: materially smaller than the full version.
     expect(desc.length).toBeLessThan(1600);
@@ -118,7 +120,7 @@ describe("toolDescriptionMode", () => {
   it("invalid mode in the settings file is dropped — full description", () => {
     const tools = setup({ toolDescriptionMode: "tiny" });
     const desc: string = tools.get("Agent").description;
-    expect(desc).toContain("## Usage notes");
+    expect(desc).toContain("## Guidelines");
   });
 
   it("compact keeps every load-bearing contract — fails when a behavior change forgets compact", () => {
@@ -251,7 +253,7 @@ describe("toolDescriptionMode", () => {
     try {
       const tools = setup({ toolDescriptionMode: "custom" });
       const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("## Usage notes");
+      expect(desc).toContain("## Guidelines");
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("no agent-tool-description.md found"));
     } finally {
       warn.mockRestore();
@@ -315,13 +317,14 @@ describe("toolDescriptionMode", () => {
     });
   });
 
-  // The tool description is the only thing the orchestrator LLM knows about an
-  // agent's capabilities before spawning it. `tools: none` and an `ext:`-only
-  // `tools:` both parse to zero built-ins (custom-agents.ts parseToolsField),
-  // and test/fixtures/.pi/agents/tools-none.md pins that the *runtime* really
-  // does drop every built-in. So the description must not claim otherwise —
-  // an agent advertised as having `bash` that cannot run `bash` gets routed
-  // work it can only fail at.
+  // The description no longer embeds the roster (agent_info('list') supplies
+  // it on demand), so the honesty contract — the only thing the orchestrator
+  // LLM knows about an agent's capabilities before spawning it — moved to that
+  // tool's output. `tools: none` and an `ext:`-only `tools:` both parse to zero
+  // built-ins (custom-agents.ts parseToolsField), and test/fixtures/.pi/agents/
+  // tools-none.md pins that the *runtime* really does drop every built-in. So
+  // the list must not claim otherwise — an agent advertised as having `bash`
+  // that cannot run `bash` gets routed work it can only fail at.
   describe("tool scope suffix reflects the real built-in set", () => {
     function withAgent(name: string, frontmatter: string, settings?: Record<string, unknown>) {
       const extra = frontmatter ? `${frontmatter}\n` : "";
@@ -334,59 +337,143 @@ describe("toolDescriptionMode", () => {
       });
     }
 
-    it("`tools: none` never claims the full built-in set", () => {
-      const tools = withAgent("quiet", "tools: none");
-      const desc: string = tools.get("Agent").description;
-      expect(desc).not.toContain("- quiet: quiet agent. (Tools: *)");
+    async function listTypes(tools: Map<string, any>): Promise<string> {
+      const tool = tools.get("agent_info");
+      const result = await tool.execute("call-1", { sub: "list" }, undefined, undefined, {});
+      return result.content[0].text as string;
+    }
+
+    it("`tools: none` never claims the full built-in set", async () => {
+      const text = await listTypes(withAgent("quiet", "tools: none"));
+      expect(text).not.toContain("quiet - quiet agent. (Tools: *)");
     });
 
-    it("`tools: none` says none only when the agent can call nothing at all", () => {
+    it("`tools: none` says none only when the agent can call nothing at all", async () => {
       // extensions: false and isolated: true both leave the agent with zero
       // built-ins AND zero extension tools — the one case "none" is true.
       for (const fm of ["tools: none\nextensions: false", "tools: none\nisolated: true"]) {
-        const tools = withAgent("silent", fm);
-        expect(tools.get("Agent").description).toContain("- silent: silent agent. (Tools: none)");
+        const text = await listTypes(withAgent("silent", fm));
+        expect(text).toContain("silent - silent agent. (Tools: none)");
       }
     });
 
-    it("`tools: none` with extensions loaded is not described as having no tools", () => {
+    it("`tools: none` with extensions loaded is not described as having no tools", async () => {
       // Zero built-ins is not zero tools: test/fixtures/.pi/agents/tools-none.md
       // pins that such an agent still surfaces alpha_read, alpha_write, beta_tool.
       // Saying "none" understates it and routes work away from the only agent
       // that could do it — the mirror of the bug this suffix used to have.
-      const tools = withAgent("probe", 'tools: none\nextensions: "./ext-alpha.mjs"');
-      const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("- probe: probe agent. (Tools: no built-ins, extension tools only)");
-      expect(desc).not.toContain("- probe: probe agent. (Tools: *)");
-      expect(desc).not.toContain("- probe: probe agent. (Tools: none)");
+      const text = await listTypes(withAgent("probe", 'tools: none\nextensions: "./ext-alpha.mjs"'));
+      expect(text).toContain("probe - probe agent. (Tools: no built-ins, extension tools only)");
+      expect(text).not.toContain("probe - probe agent. (Tools: *)");
+      expect(text).not.toContain("probe - probe agent. (Tools: none)");
     });
 
-    it("an ext:-only `tools:` is described by what it actually has", () => {
-      const tools = withAgent("extonly", 'tools: "ext:probe.mjs"');
-      const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("- extonly: extonly agent. (Tools: no built-ins, extension tools only)");
-      expect(desc).not.toContain("- extonly: extonly agent. (Tools: *)");
+    it("an ext:-only `tools:` is described by what it actually has", async () => {
+      const text = await listTypes(withAgent("extonly", 'tools: "ext:probe.mjs"'));
+      expect(text).toContain("extonly - extonly agent. (Tools: no built-ins, extension tools only)");
+      expect(text).not.toContain("extonly - extonly agent. (Tools: *)");
     });
 
-    it("compact mode shares the suffix builder and must not diverge", () => {
+    it("compact mode carries no roster — the suffix contract lives on agent_info('list')", async () => {
       const tools = withAgent("quiet", "tools: none\nextensions: false", { toolDescriptionMode: "compact" });
-      const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("- quiet: quiet agent. (Tools: none)");
-      expect(desc).not.toContain("- quiet: quiet agent. (Tools: *)");
+      expect(tools.get("Agent").description).not.toContain("quiet - quiet agent.");
+      const text = await listTypes(tools);
+      expect(text).toContain("quiet - quiet agent. (Tools: none)");
+      expect(text).not.toContain("quiet - quiet agent. (Tools: *)");
     });
 
-    it("an omitted `tools:` still renders as * — absent means all built-ins", () => {
+    it("an omitted `tools:` still renders as * — absent means all built-ins", async () => {
       // Guards the fix from over-correcting: undefined (inherit everything,
       // as the shipped defaults do) is not the same as [] (explicitly zero).
-      const tools = withAgent("broad", "");
-      const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("- broad: broad agent. (Tools: *)");
+      const text = await listTypes(withAgent("broad", ""));
+      expect(text).toContain("broad - broad agent. (Tools: *)");
     });
 
-    it("a narrowed `tools:` still lists the names it actually has", () => {
-      const tools = withAgent("narrow", "tools: read, grep");
-      const desc: string = tools.get("Agent").description;
-      expect(desc).toContain("- narrow: narrow agent. (Tools: read, grep)");
+    it("a narrowed `tools:` still lists the names it actually has", async () => {
+      const text = await listTypes(withAgent("narrow", "tools: read, grep"));
+      expect(text).toContain("narrow - narrow agent. (Tools: read, grep)");
+    });
+  });
+
+  describe("agent_info — the on-demand info tool", () => {
+    async function callInfo(tools: Map<string, any>, params: Record<string, unknown>) {
+      const tool = tools.get("agent_info");
+      const result = await tool.execute("call-1", params, undefined, undefined, {});
+      return result.content[0].text as string;
+    }
+
+    it("registers with the four subs plus the name param", () => {
+      const tool = setup().get("agent_info");
+      expect(tool).toBeDefined();
+      const literals = tool.parameters.properties.sub.anyOf.map((s: any) => s.const);
+      expect([...literals].sort()).toEqual(["create", "guidelines", "info", "list"]);
+      expect(tool.parameters.properties.name).toBeDefined();
+    });
+
+    it("'list' returns the agent roster with provenance markers and tool suffixes", async () => {
+      const tools = setup({}, () => {
+        mkdirSync(join(tmpDir, ".pi", "agents"), { recursive: true });
+        writeFileSync(
+          join(tmpDir, ".pi", "agents", "audit.md"),
+          "---\ndescription: Audit agent.\ntools: read, grep\n---\n\nBody.\n",
+        );
+      });
+      const text = await callInfo(tools, { sub: "list" });
+      expect(text).toContain("# Defined Agents");
+      expect(text).toContain("• audit - Audit agent. (Tools: read, grep)");
+      // Defaults carry no marker, custom project agents do. The roster is what
+      // replaced the embedded type list in the description.
+      expect(text).toContain("Explore -");
+      expect(text).toContain("• = project  ◦ = global");
+    });
+
+    it("'guidelines' returns the registered full description", async () => {
+      const tools = setup();
+      const text = await callInfo(tools, { sub: "guidelines" });
+      expect(text).toBe(tools.get("Agent").description);
+    });
+
+    it("'info' returns the agent file's frontmatter and requires a name", async () => {
+      const tools = setup({}, () => {
+        mkdirSync(join(tmpDir, ".pi", "agents"), { recursive: true });
+        writeFileSync(
+          join(tmpDir, ".pi", "agents", "audit.md"),
+          "---\ndescription: Audit agent.\ntools: read, grep\nisolation: worktree\n---\n\nBody.\n",
+        );
+      });
+      const missing = await callInfo(tools, { sub: "info" });
+      expect(missing).toContain("'name' parameter is required");
+      const fm = await callInfo(tools, { sub: "info", name: "audit" });
+      expect(fm).toContain("description: Audit agent.");
+      expect(fm).toContain("isolation: worktree");
+      const unknown = await callInfo(tools, { sub: "info", name: "nope" });
+      expect(unknown).toContain('Agent not found: "nope"');
+    });
+
+    it("'create' documents the frontmatter field set final after the rebase decisions", async () => {
+      const text = await callInfo(setup(), { sub: "create" });
+      for (const field of [
+        "**name**",
+        "**display_name**",
+        "**tools**",
+        "**model**",
+        "**thinking**",
+        "**max_turns**",
+        "**prompt_mode**",
+        "**inherit_context**",
+        "**memory**",
+        "**isolated**",
+        "**isolation**",
+        "**persist_session**",
+        "**allowed_subagents**",
+        "**enabled**",
+      ]) {
+        expect(text).toContain(field);
+      }
+      // 1r7: no background/foreground selector — runs always in the background.
+      expect(text).not.toContain("run_in_background");
+      // 8lw: worktree isolation is frontmatter-only — no Agent tool parameter.
+      expect(text).toContain("frontmatter-only");
     });
   });
 });

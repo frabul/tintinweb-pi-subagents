@@ -6,6 +6,11 @@ using tool `agent_info('list')`, and check which one of them most fits the task 
 When using the Agent tool, specify a subagent_type parameter to select which agent type to use.
 If the user asks to create a custom agent, obtain instructions using `agent_info('create')`.
 
+This document is the reference copy of the Agent tool's full description (the
+runtime text is generated in `src/index.ts`; `agent_info('guidelines')` returns
+it to the model on demand). The `schedule` bullet below is emitted only when
+scheduling is enabled (the default).
+
 ## Guidelines
 
 - Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
@@ -17,7 +22,8 @@ If the user asks to create a custom agent, obtain instructions using `agent_info
 - Get an agent's full result with get_subagent_result (its ID or handle) — it reports the agent's status and full result; the completion notification carries only a preview. Do not use it to poll — you will be notified when the agent completes.
 - Address a running agent by its handle — the `name` you gave the Agent call, or its type: `@name` at the chat prompt routes to it, and steer_subagent takes the handle directly.
 - Use resume to continue the conversation with an agent that completed its task. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs — the prompt must be self-contained.
-- Use inherit_context if the agent needs the parent conversation history.{{scheduleGuideline}}
+- Use inherit_context if the agent needs the parent conversation history.
+- Use `schedule` only when the user explicitly asked for scheduled / recurring / delayed execution (e.g. "every Monday", "in an hour"). Don't auto-schedule from vague intent like "monitor X" — run once now or ask.
 - Split complex tasks into simpler subtasks to assign to multiple agents. Example: if a task involves implementation then testing, assign one agent to implementation and another to testing.
 - Verify the work done by subagents. Verification can eventually be delegated to another agent.
 
