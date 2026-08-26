@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../src/agent-manager.js";
+import { getAllTimeStats, resetLifetimeStats } from "../src/lifetime-stats.js";
 
 vi.mock("../src/agent-runner.js", () => ({
   runAgent: vi.fn(),
@@ -34,6 +35,8 @@ describe("AgentManager — record GC", () => {
   let manager: AgentManager;
 
   beforeEach(() => {
+    // The permanent store is module-level — start each test from zero.
+    resetLifetimeStats();
     // Before construction: the cleanup interval is started in the constructor.
     vi.useFakeTimers();
   });
@@ -152,6 +155,39 @@ describe("AgentManager — record GC", () => {
     await vi.advanceTimersByTimeAsync(TICK * 4);
     expect(manager.getRecord(id)).toBeUndefined(); // aged out on a later tick
   });
+
+  it("folds an evicted record's stats into the permanent store", async () => {
+    manager = new AgentManager();
+    const { id, record } = await settled("stale");
+    record.toolUses = 7;
+    record.lifetimeUsage = { input: 100, output: 50, cacheWrite: 10, cacheRead: 200, cost: 0.002 };
+    // A real timeline: started 1 min before the cutoff, ran 30s, finished 30s
+    // before the cutoff — evictable now, with a positive, known duration.
+    record.startedAt = Date.now() - (TEN_MINUTES + 60_000);
+    record.completedAt = record.startedAt + 30_000;
+
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    expect(manager.getRecord(id)).toBeUndefined();
+    const stats = getAllTimeStats();
+    expect(stats.runs).toBe(1);
+    expect(stats.toolUses).toBe(7);
+    expect(stats.lifetimeUsage).toMatchObject({ input: 100, output: 50, cacheWrite: 10, cacheRead: 200, cost: 0.002 });
+    expect(stats.durationMs).toBe(30_000);
+  });
+
+  it("folds stats through clearCompleted() too", async () => {
+    manager = new AgentManager();
+    const { record } = await settled("swept");
+    record.toolUses = 3;
+
+    manager.clearCompleted();
+
+    expect(manager.listAgents()).toHaveLength(0);
+    const stats = getAllTimeStats();
+    expect(stats.runs).toBe(1);
+    expect(stats.toolUses).toBe(3);
+  });
 });
 
 // Eviction is exactly the moment a handle would otherwise stop working. These
@@ -160,7 +196,10 @@ describe("AgentManager — record GC", () => {
 describe("AgentManager — tombstones outliving the GC", () => {
   let manager: AgentManager;
 
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => {
+    resetLifetimeStats();
+    vi.useFakeTimers();
+  });
   afterEach(() => {
     manager?.dispose();
     vi.useRealTimers();

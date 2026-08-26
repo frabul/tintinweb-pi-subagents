@@ -26,6 +26,7 @@ import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { GroupJoinManager } from "./group-join.js";
 import { resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-config.js";
+import { getAllTimeStats } from "./lifetime-stats.js";
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { describeModel, type ModelRegistry, resolveModel } from "./model-resolver.js";
@@ -58,7 +59,7 @@ import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
 import { renderWorkflowCard, renderWorkflowEntryCard } from "./ui/workflow-card.js";
 import { openWorkflowFromFleet, showWorkflowsMenu, type WorkflowMenuDeps } from "./ui/workflow-menu.js";
-import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, PendingUsagePool, toReportedUsage } from "./usage.js";
+import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, PendingUsagePool, toReportedUsage } from "./usage.js";
 import { decideWorkflowCollision, FOREIGN_WORKFLOW_TOOL_NAMES } from "./workflow/collisions.js";
 import { WORKFLOW_ENTRY_TYPE, type WorkflowEntryData, workflowEntryData } from "./workflow/entry.js";
 import { createWorkflowHost } from "./workflow/host.js";
@@ -250,6 +251,43 @@ export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
 
 /** CLI flag that runs a workflow script at session start. */
 export const WORKFLOW_FILE_FLAG = "subagents-workflow-file";
+
+/**
+ * Stats headline for the /agents menu title.
+ *
+ * 'Session total' (fork fd1e0c4) aggregates the CURRENT records — session-
+ * scoped, since clearCompleted() wipes the record list on session boundaries.
+ * 'All-time total' reads the permanent store, which accumulates every evicted
+ * record's stats (see lifetime-stats.ts). Both use the weighted token formula
+ * from Decision 2; cost is formatted separately via formatCost.
+ */
+export function agentsMenuTitle(agents: { lifetimeUsage: LifetimeUsage; toolUses: number }[]): string {
+  const lines: string[] = [];
+
+  const sessionUsage: LifetimeUsage = { input: 0, output: 0, cacheWrite: 0 };
+  for (const a of agents) addUsage(sessionUsage, a.lifetimeUsage);
+  const sessionToolUses = agents.reduce((sum, a) => sum + a.toolUses, 0);
+  const sessionParts: string[] = [];
+  const sessionTokens = getLifetimeTotal(sessionUsage);
+  if (sessionTokens > 0) sessionParts.push(formatTokens(sessionTokens));
+  const sessionCost = formatCost(getLifetimeCost(sessionUsage));
+  if (sessionCost) sessionParts.push(sessionCost);
+  if (sessionToolUses > 0) sessionParts.push(`${sessionToolUses} tool use${sessionToolUses === 1 ? "" : "s"}`);
+  if (sessionParts.length > 0) lines.push(`  Session total: ${sessionParts.join(" · ")}`);
+
+  const allTime = getAllTimeStats();
+  const allParts: string[] = [];
+  const allTokens = getLifetimeTotal(allTime.lifetimeUsage);
+  if (allTokens > 0) allParts.push(formatTokens(allTokens));
+  const allCost = formatCost(getLifetimeCost(allTime.lifetimeUsage));
+  if (allCost) allParts.push(allCost);
+  if (allTime.toolUses > 0) allParts.push(`${allTime.toolUses} tool use${allTime.toolUses === 1 ? "" : "s"}`);
+  if (allTime.runs > 0) allParts.push(`${allTime.runs} run${allTime.runs === 1 ? "" : "s"}`);
+  if (allTime.durationMs > 0) allParts.push(formatMs(allTime.durationMs));
+  if (allParts.length > 0) lines.push(`  All-time total: ${allParts.join(" · ")}`);
+
+  return lines.length > 0 ? `Agents\n${lines.join("\n")}` : "Agents";
+}
 
 /**
  * Re-exported from where they now live, because this is where they were
@@ -2677,7 +2715,7 @@ Terse command-style prompts produce shallow, generic work.
       ctx.ui.notify(noAgentsMsg, "info");
     }
 
-    const choice = await ctx.ui.select("Agents", options);
+    const choice = await ctx.ui.select(agentsMenuTitle(agents), options);
     if (!choice) return;
 
     if (choice.startsWith("Running agents (")) {

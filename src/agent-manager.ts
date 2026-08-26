@@ -12,6 +12,7 @@ import { isAbsolute } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
+import { accumulateLifetimeStats } from "./lifetime-stats.js";
 import { assignHandle, handleBase } from "./mention.js";
 import { describeModel } from "./model-resolver.js";
 import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, SubagentType, ThinkingLevel } from "./types.js";
@@ -1289,6 +1290,18 @@ export class AgentManager {
   /** Dispose a record's session and remove it from the map. */
   private removeRecord(id: string, record: AgentRecord): void {
     this.tombstone(record);
+    // Fold the departing record's stats into the permanent store first: this is
+    // the single funnel for the 10-minute cleanup timer and clearCompleted()
+    // evictions, so everything a subagent did stays countable over time even
+    // though the record itself is gone. (The quit path clears the map directly
+    // in dispose() — with an in-memory store there is nothing left to read
+    // after the process exits, so no fold is needed there.)
+    accumulateLifetimeStats({
+      lifetimeUsage: record.lifetimeUsage,
+      toolUses: record.toolUses,
+      durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
+      runs: 1,
+    });
     const session = record.session;
     // Detached before the shutdown starts, so the record leaves the map at once and
     // nothing can observe a session that is half torn down.
