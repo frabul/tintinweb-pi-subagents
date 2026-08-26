@@ -382,7 +382,7 @@ A few rules the examples don't make obvious:
 - `exclude_extensions:` is **not a sandbox**: excluded extensions' factory code still executes once during loading. Exclusion suppresses their tools and their bound lifecycle hooks (`pi.on` handlers like `session_start` only fire for extensions bound to the session), but not other load-time side effects — a factory that subscribes directly to the shared `pi.events` bus stays live. Don't rely on it to contain an untrusted extension.
 - Array and string forms are equivalent: `[a, b]` == `"a, b"`.
 
-**How an agent's scope is advertised.** The Agent tool description lists every available agent with a `(Tools: …)` suffix, and that suffix is what the orchestrator reads when deciding where to route work. It describes **built-in scope only** — extension tools are resolved when the agent runs (extensions may register lazily, see above), so they can't be enumerated when the description is built:
+**How an agent's scope is advertised.** The Agent tool description stays lean and points the orchestrator at `agent_info('list')`, which lists every agent with a `(Tools: …)` suffix — that suffix is what the orchestrator reads when deciding where to route work. It describes **built-in scope only** — extension tools are resolved when the agent runs (extensions may register lazily, see above), so they can't be enumerated when the list is built:
 
 | `tools:` | suffix |
 |---|---|
@@ -457,11 +457,19 @@ Check status and retrieve results from a background agent.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `agent_id` | string | yes | Agent ID to check |
-| `wait` | boolean | no | Wait for completion |
+| `agent_id` | string | yes | Agent ID to check (its handle also works — the `name` if given, otherwise the type, e.g. `explore`, `explore-2`) |
 | `verbose` | boolean | no | Include full conversation log |
 
-Cancelling a `wait: true` call (for example, with `Esc`) stops only the wait. The background agent keeps running, and its completion notification still arrives normally.
+### `agent_info`
+
+Query Sub-Agent system information — the tool the orchestrator pulls details from on demand (the Agent tool description deliberately stays lean).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `sub` | string | yes | `list` (all agent types, each with its model and `(Tools: …)` scope), `info` (one agent's frontmatter), `guidelines` (the full Agent usage guidelines), `create` (instructions for authoring a custom agent file) |
+| `name` | string | no | Agent name — required when `sub` is `info` |
+
+`list` marks provenance on each row: `•` = project agent, `◦` = global agent, no marker = default. `info` returns the raw frontmatter of the agent's `.md` file (project/workspace/global), or a registry summary for default agents that have no file.
 
 ### `steer_subagent`
 
@@ -672,7 +680,7 @@ Leaving it unset is not quite the same as `true`. Unset means *auto*: on, unless
 
 The match is on the exact tool names `Workflow` (Claude Code's) and `SubagentWorkflow` (ours), never a substring, so a `list_workflows` or `github_workflow_run` from some CI integration does not silently take the feature down. The check runs at `session_start` and nowhere earlier, because `getAllTools` throws during extension loading and load order means a check at registration time could not see an extension that has not loaded yet — so the tool is registered first and withdrawn from the active set through `setActiveTools`, which rebuilds the system prompt before any turn runs. When the other extension took the `SubagentWorkflow` name itself, pi's first-registration-wins rule already dropped ours, so there is nothing to withdraw and only the menu and the CLI flag come down.
 
-**Tool description** (`toolDescriptionMode`, default `"full"`): which Agent tool description the LLM sees. `"full"` is the rich Claude Code-style prompt (~1,400 tokens with the default agents); `"compact"` is ~75% smaller — one-line agent type list, terse usage notes — for small/local models where tool-spec tokens are expensive. Per-option details stay in the parameter descriptions in every mode (the parameter schema is never customizable). Applies on the next pi session.
+**Tool description** (`toolDescriptionMode`, default `"full"`): which Agent tool description the LLM sees. `"full"` is the fork-style usage guidelines — how to launch, brief and verify agents, with agent capabilities pulled on demand via `agent_info` (`list` for types + tools, `info` for a single agent's frontmatter, `create` for custom-agent authoring, `guidelines` for this full text). `"compact"` is ~75% smaller than that — a lean `agent_info('list')` pointer with terse usage notes — for small/local models. Per-option details stay in the parameter descriptions in every mode (the parameter schema is never customizable). Applies on the next pi session.
 
 `"custom"` registers your own description from `<cwd>/.pi/agent-tool-description.md` (project) or `<agentDir>/agent-tool-description.md` (global; project wins). The file is read once at tool registration, so edits also apply on the next pi session. Dynamic parts stay live via placeholders — a static agent list would go stale the moment you add a custom agent:
 

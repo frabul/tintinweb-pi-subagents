@@ -5,6 +5,7 @@
  *   Agent             — LLM-callable: spawn a sub-agent
  *   get_subagent_result  — LLM-callable: check background agent status/result
  *   steer_subagent       — LLM-callable: send a steering message to a running agent
+ *   agent_info           — LLM-callable: pull agent info on demand (list/guidelines/create/info)
  *
  * Commands:
  *   /agents                 — Interactive agent management menu
@@ -17,13 +18,13 @@ import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Tex
 import { Type } from "@sinclair/typebox";
 import { abortable } from "./abortable.js";
 import { hasAgentBadge, renderAgentName } from "./agent-color.js";
-import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile, personalAgentsDir, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
+import { buildNewAgentFile, disableInContent, enableInContent, findAgentFile, isEmptyStub, locateAgentFile, personalAgentsDir, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
 import { AgentManager, isTopLevelAgent } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
 import { inChildSessionContext } from "./child-context.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
-import { loadCustomAgents } from "./custom-agents.js";
+import { loadCustomAgents, parseAgentFrontmatter } from "./custom-agents.js";
 import { GroupJoinManager } from "./group-join.js";
 import { resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-config.js";
 import { getAllTimeStats } from "./lifetime-stats.js";
@@ -1444,61 +1445,70 @@ export default function (pi: ExtensionAPI) {
     : "";
 
   // Compact Agent tool description (#91, `toolDescriptionMode: "compact"`) —
-  // the same load-bearing facts as the full version at ~75% fewer tokens, for
-  // small/local models. Per-option details live in the param descriptions.
-  const compactAgentToolDescription = `Launch an autonomous agent for complex, multi-step tasks. Agent types:
-${buildCompactTypeListText()}
-
-Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.md (global).
-
+  // a lean pointer into the `agent_info` tool plus the load-bearing usage
+  // notes, for small/local models. Details (types, tools, frontmatter) are
+  // pulled on demand via `agent_info`; per-parameter details live in the
+  // parameter descriptions.
+  const compactAgentToolDescription = `Launch an autonomous sub-agent for complex, multi-step tasks.
+Before using this tool you MUST call \`agent_info('list')\` to get available agents.
 Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
-- Parallel work: one message, multiple Agent calls — they run concurrently.
-- Subagents always run in the background; you'll be notified when one completes. Never fabricate or predict a pending agent's results — if the user asks before the notification arrives, say it's still running.
-- The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
-- resume continues a previous agent by ID; steer_subagent messages a running one.`;
+- Optional parameters override the selected agent type's defaults. Omit or blank them when no override is intended.
+- Agents always run in the background: send multiple Agent calls in one message for parallel work; you are notified as each completes — **NEVER POLL OR SLEEP**.
+- The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done. get_subagent_result retrieves the full result.
+- Address agents by @name / their handle: steer_subagent messages a running one; resume continues a previous agent by ID.
+- Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.md (global).`;
 
-  const fullAgentToolDescription = `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
+  // Full Agent tool description — the guidelines-style text. The orchestrator
+  // pulls details (agent types, capabilities, custom-agent authoring) on
+  // demand via the `agent_info` tool, so this stays lean and only restates
+  // usage guidance.
+  const fullAgentToolDescription = `# Agents
 
-Available agent types and the tools they have access to:
-${buildTypeListText()}
-
-Custom agents can be defined in .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.md (global) — they are picked up automatically. Project-level agents override global ones. Creating a .md file with the same name as a default agent overrides it.
-
+You can launch new agents to help you to complete your task without cluttering your context window.
+If you haven't already done so or if explicitly requested, inspect the available agents and their capabilities
+using tool \`agent_info('list')\`, and check which one of them most fits the task you want to delegate.
 When using the Agent tool, specify a subagent_type parameter to select which agent type to use.
+If the user asks to create a custom agent, obtain instructions using \`agent_info('create')\`.
 
-## When not to use
-
-If the target is already known, use a direct tool — \`read\` for a known path, \`grep\`/\`find\` for a specific symbol or string. Reserve this tool for open-ended questions that span the codebase, or tasks that match an available agent type.
-
-## Usage notes
+## Guidelines
 
 - Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
-- When you launch multiple agents for independent work, send them in a single message with multiple tool uses so they run concurrently. If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple Agent tool use content blocks.
+- Optional parameters override the selected agent type's defaults. Omit or blank them when no override is intended.
+- All agents run in the background. When you launch multiple agents for independent work, send them in a single message with multiple tool uses, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls.
 - When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
-- Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting the work as done.
-- Agents always run in the background and you will be automatically notified when one completes — do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
-- **Don't race**: after launching a background agent, you know nothing about its results. Never fabricate or predict them in any format — not as prose, summary, or structured output. The completion notification arrives in a later turn; it is never something you write yourself. If the user asks before it lands, say the agent is still running — give status, not a guess.
-- Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
-- Use steer_subagent to send mid-run messages to a running background agent.
-- Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
-- If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
-- Use model to override the agent type's frontmatter model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet"); omit it to use the type's default.
-- Use thinking to control extended thinking level.
+- When an agent runs in the background, you will be notified on completion — **DO NOT POLL OR SLEEP WAITING FOR IT**. Continue with other work or wait for user prompt.
+- For broad codebase exploration or research, spawn an agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.
+- Get an agent's full result with get_subagent_result (its ID or handle) — it reports the agent's status and full result; the completion notification carries only a preview. Do not use it to poll — you will be notified when the agent completes.
+- Address a running agent by its handle — the \`name\` you gave the Agent call, or its type: \`@name\` at the chat prompt routes to it, and steer_subagent takes the handle directly.
+- Use resume to continue the conversation with an agent that completed its task. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs — the prompt must be self-contained.
 - Use inherit_context if the agent needs the parent conversation history.${scheduleGuideline}
+- Split complex tasks into simpler subtasks to assign to multiple agents. Example: if a task involves implementation then testing, assign one agent to implementation and another to testing.
+- Verify the work done by subagents. Verification can eventually be delegated to another agent.
 
 ## Writing the prompt
 
-Brief the agent like a smart colleague who just walked into the room — it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
-- Explain what you're trying to accomplish and why.
-- Describe what you've already learned or ruled out.
-- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.
-- If you need a short response, say so ("report in under 200 words").
-- Lookups: hand over the exact command. Investigations: hand over the question — prescribed steps become dead weight when the premise is wrong.
+- Give enough context about the surrounding problem so that the agent can make judgment calls rather than just guessing.
+- Describe what you've already learned or ruled out, so that the agent doesn't need to repeat the same work.
+- Provide clear, detailed prompts so the agent can work autonomously.
+- When you assign an implementation task, mention the known implementation details (strategy, modules to change, etc.) to avoid unnecessary research by the subagent.
+- Add constraints. Example: "Only change this file, don't add new dependencies, etc."
+- If all information is already in one or more files, provide the reference to the files instead.
 
-Terse command-style prompts produce shallow, generic work.
+## What to delegate vs do directly
 
-**Never delegate understanding.** Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.`;
+If the target is already known, use a direct tool — \`read\` for a known path, \`grep\`/\`find\` for a specific symbol or string. Reserve this tool for open-ended questions that span the codebase, or tasks that require multi-step reasoning and could clutter the context window with intermediate steps and findings which are not relevant for the big picture.
+
+Delegate to subagents:
+- Independent implementation tasks (e.g. refactor package A)
+- Test writing after implementation
+- Validation of the execution of some task
+- Codebase exploration / research
+
+Do directly:
+- Quick edits (one-liners, config changes)
+- Reading files you already have anchors for
+- grep/find for specific known targets (e.g. "Where is function X defined?")`;
 
   // `toolDescriptionMode: "custom"` — user-authored description with live
   // dynamic parts. Project file wins over global; missing/empty falls back to
@@ -2641,6 +2651,157 @@ Terse command-style prompts produce shallow, generic work.
         );
       } catch (err) {
         return textResult(`Failed to steer agent: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  }));
+
+  // ---- agent_info tool ----
+  // The on-demand counterpart to the Agent tool description: the description
+  // stays lean and points here, and this tool is where the orchestrator pulls
+  // details — agent types (+ their advertised tools), per-agent frontmatter,
+  // custom-agent authoring instructions, and the full usage guidelines.
+  pi.registerTool(defineTool({
+    name: SUBAGENT_TOOL_NAMES.AGENT_INFO,
+    label: "Sub-Agents Info",
+    description:
+      "Query Sub-Agent system information. Use `sub` to select the type of information.",
+    promptSnippet: "Get agent system info (list, guidelines, create instructions, frontmatter)",
+    parameters: Type.Object({
+      sub: Type.Union([
+        Type.Literal("guidelines", { description: "Return the full agents tool usage guidelines" }),
+        Type.Literal("create", { description: "Return instructions for creating custom agents" }),
+        Type.Literal("list", { description: "List all defined agents with their descriptions and tools" }),
+        Type.Literal("info", { description: "Return the frontmatter of a specific agent" }),
+      ]),
+      name: Type.Optional(Type.String({
+        description: "Agent name (required when sub is 'info')",
+      })),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      // Same freshness contract as the Agent tool: new .md files are picked up
+      // without a restart (or an unrelated spawn).
+      reloadCustomAgents();
+      switch (params.sub) {
+        case "guidelines":
+          return textResult(fullAgentToolDescription);
+        case "create": {
+          const projectDir = join(process.cwd(), ".pi", "agents");
+          const personalDir = join(getAgentDir(), "agents");
+          return textResult(
+            "# Creating Custom Agents\n\n" +
+            "Custom agents are defined as markdown files with YAML frontmatter in:\n" +
+            `- **Project**: ${projectDir}/<name>.md\n` +
+            `- **Global**: ${personalDir}/<name>.md\n` +
+            "\nProject-level agents override global ones with the same name.\n\n" +
+            "Use the write tool to create/edit project agents manually. \n" +
+            "Create or modify global agents only if requested by the user. \n" +
+            "## File Format\n\n" +
+            "```markdown\n" +
+            "---\n" +
+            "description: One-line description shown in the UI\n" +
+            "tools: read, bash, edit, write, grep, find, ls\n" +
+            "model: anthropic/claude-haiku-4-5-20251001\n" +
+            "prompt_mode: replace\n" +
+            "---\n\n" +
+            "<system prompt body>\n" +
+            "```\n\n" +
+            "## Frontmatter Fields\n\n" +
+            "- **description** (recommended) — one-line description shown in listings\n" +
+            "- **name** — the agent's type: what `subagent_type` and `@handle` address. Defaults to the filename; must not contain \":\"\n" +
+            "- **display_name** — optional UI label\n" +
+            "- **color** — optional badge color\n" +
+            "- **tools** — comma-separated built-in tool names, \"all\" for all, \"none\" for none, \"ext:<ext>\" for extension tools\n" +
+            "- **extensions** — true (inherit all), false (none), or comma-separated names\n" +
+            "- **exclude_extensions** — extension denylist (exclude wins)\n" +
+            "- **skills** — true (inherit all), false (none), or comma-separated names\n" +
+            "- **disallowed_tools** — tools to deny even if extensions provide them\n" +
+            "- **model** — default model, e.g. \"anthropic/claude-haiku-4-5-20251001\". The Agent tool's `model` parameter overrides it; omit to inherit the parent model\n" +
+            "- **thinking** — thinking level: off, minimal, low, medium, high, xhigh, max\n" +
+            "- **max_turns** — max agentic turns (0 = unlimited)\n" +
+            "- **prompt_mode** — \"replace\" (body replaces the whole system prompt) or \"append\" (body is appended)\n" +
+            "- **inherit_context** — true to fork the parent conversation into the agent; default false (fresh context)\n" +
+            "- **memory** — \"user\", \"project\", or \"local\" for persistent memory\n" +
+            "- **isolated** — true for no extension/MCP tools\n" +
+            "- **isolation** — \"worktree\" to run in an isolated git worktree (frontmatter-only; the Agent tool has no isolation parameter)\n" +
+            "- **persist_session** — override the rememberAgents project default (true/false) for this agent\n" +
+            "- **output_transcript** — default true; false writes no .output transcript\n" +
+            "- **session_dir** — optional session directory when persist_session is true\n" +
+            "- **allowed_subagents** — opt-in nested delegation: comma-separated types or \"all\"; omitted means no nested Agent tools\n" +
+            "- **enabled** — false to disable the agent\n\n" +
+            `- The prompt body supports **placeholders**: \${REPO_AGENTS_MD} (repo AGENTS.md, walked up from cwd) and \${USER_AGENTS_MD} (~/.pi/agent/AGENTS.md)`
+          );
+        }
+        case "list": {
+          const lines = getAvailableTypes()
+            .map(name => {
+              const cfg = getAgentConfig(name);
+              const src = cfg?.source === "project" ? "•" : cfg?.source === "global" ? "◦" : " ";
+              const modelSuffix = cfg?.model ? ` (${getModelLabelFromConfig(cfg.model)})` : "";
+              const toolsSuffix = ` (Tools: ${formatToolsSuffix(cfg)})`;
+              return `${src} ${name} - ${cfg?.description ?? name}${modelSuffix}${toolsSuffix}`;
+            });
+          return textResult(
+            "# Defined Agents\n\n" +
+            (lines.length > 0 ? lines.join("\n") : "No agents defined.") +
+            "\n\n• = project  ◦ = global"
+          );
+        }
+        case "info": {
+          const agentName = params.name;
+          if (!agentName) {
+            return textResult("Error: 'name' parameter is required when sub is 'info'.");
+          }
+          const cfg = getAgentConfig(agentName);
+          const file = findAgentFile(agentName) ?? (cfg ? locateAgentFile(agentName, cfg.sourcePath) : undefined);
+          if (!file && !cfg) {
+            return textResult(`Agent not found: "${agentName}". Use sub: "list" to see all defined agents.`);
+          }
+          if (file) {
+            try {
+              const content = readFileSync(file.path, "utf-8");
+              const { frontmatter } = parseAgentFrontmatter<Record<string, unknown>>(content);
+              const fmLines = Object.entries(frontmatter).map(([k, v]) =>
+                typeof v === "string" ? `${k}: ${v}` : `${k}: ${JSON.stringify(v)}`);
+              return textResult(
+                `# Agent: ${agentName} (${file.location})\n\n` +
+                `---\n${fmLines.join("\n")}\n---`
+              );
+            } catch (err) {
+              return textResult(`Error reading agent file ${file.path}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+          // Fallback: show config from registry (default agents without a file)
+          const isDefault = cfg?.isDefault ? " (default)" : "";
+          const source = cfg?.source ? ` (${cfg.source})` : "";
+          const disabled = cfg?.enabled === false ? " [disabled]" : "";
+          const model = cfg?.model ?? "inherit";
+          const tools = cfg?.builtinToolNames?.join(", ") ?? "all";
+          const ext = cfg?.extensions === true ? "true" : cfg?.extensions === false ? "false" : cfg?.extensions?.join(", ") ?? "true";
+          const skills = cfg?.skills === true ? "true" : cfg?.skills === false ? "false" : cfg?.skills?.join(", ") ?? "true";
+          const thinking = cfg?.thinking ?? "inherit";
+          const maxTurns = cfg?.maxTurns != null ? String(cfg.maxTurns) : "inherit";
+          const memory = cfg?.memory ?? "none";
+          const isolation = cfg?.isolation ?? "none";
+          return textResult(
+            `# Agent: ${agentName}${isDefault}${source}${disabled}\n\n` +
+            `---\n` +
+            `description: ${cfg?.description ?? agentName}\n` +
+            `model: ${model}\n` +
+            `tools: ${tools}\n` +
+            `extensions: ${ext}\n` +
+            `skills: ${skills}\n` +
+            `thinking: ${thinking}\n` +
+            `max_turns: ${maxTurns}\n` +
+            `persist_session: ${cfg?.persistSession == null ? "inherit (rememberAgents default)" : cfg.persistSession}\n` +
+            `memory: ${memory}\n` +
+            `isolation: ${isolation}\n` +
+            `inherit_context: ${cfg?.inheritContext ? "true" : "false"}\n` +
+            `isolated: ${cfg?.isolated ? "true" : "false"}\n` +
+            `---`
+          );
+        }
+        default:
+          return textResult(`Unknown sub: "${params.sub}". Valid values: guidelines, create, list, info`);
       }
     },
   }));
