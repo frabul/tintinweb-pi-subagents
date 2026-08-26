@@ -77,6 +77,8 @@ export interface AgentDetails {
   spinnerFrame?: number;
   /** Short label for the model the run used, e.g. "haiku 4.5". */
   modelName?: string;
+  /** Canonical `provider/id` of the model the run used, for the chat line. */
+  resolvedModel?: string;
   /** Notable config tags (e.g. ["thinking: high", "isolated"]). */
   tags?: string[];
   /** Current turn count. */

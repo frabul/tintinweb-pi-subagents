@@ -33,6 +33,10 @@ type WidgetFactory = (
   tui: { terminal: { columns: number; rows?: number }; requestRender: ReturnType<typeof vi.fn> },
   activeTheme: typeof theme,
 ) => RenderedComponent;
+
+/** Text renders padded to width with the row tint re-emitted per line — strip both for exact comparison. */
+const linesOf = (s: string): string[] =>
+  s.split("\n").map(l => l.replace(/\u001b\[[0-9;]*m/g, "").trimEnd());
 type SessionHandler = (...args: unknown[]) => unknown;
 
 interface RegisteredTool {
@@ -140,11 +144,90 @@ describe("custom agent color runtime surfaces", () => {
       expect(missingType).toContain("<toolTitle>*Agent*</toolTitle>");
       expect(missingType).not.toContain(PURPLE_BACKGROUND);
 
-      // An agent without a color must render the pre-badge line byte for byte:
-      // no badge, and no row background of our own for HTML export to pick up.
+      // An agent without a color must render the header line byte for byte:
+      // no badge, no row background of our own (HTML export), and the resolved
+      // model/thinking lines beneath it.
       registerAgents(new Map([[TYPE, { ...config, color: undefined }]]));
       const uncolored = render({ isPartial: false, isError: false });
-      expect(uncolored.trimEnd()).toBe(`▸ <toolTitle>*${DISPLAY_NAME}*</toolTitle>  <muted>Review this change</muted>`);
+      expect(linesOf(uncolored)).toEqual([
+        `▸ <toolTitle>*${DISPLAY_NAME}*</toolTitle>  <muted>Review this change</muted>`,
+        `<dim>  ⎿  subagent_type: ${TYPE}</dim>`,
+        `<dim>  ⎿  model: inherit</dim>`,
+        `<dim>  ⎿  thinking: inherit</dim>`,
+      ]);
+    } finally {
+      await handlers.get("session_shutdown")?.({}, { hasUI: false, ui: {} });
+    }
+  });
+
+  it("renders resolved model, thinking and every passed parameter on the invocation line", async () => {
+    const { pi, tools, handlers } = makePi();
+    subagentsExtension(pi);
+    registerColoredReviewer();
+    try {
+      const tool = tools.get("Agent");
+      if (!tool) throw new Error("Agent tool was not registered");
+      const call = (args: Record<string, unknown>) =>
+        tool.renderCall(args, theme, { isPartial: false, isError: false }).render(120).join("\n");
+
+      // Nothing pinned, no parent state yet: model and thinking resolve to
+      // `inherit`, and no optional parameter is listed.
+      const plain = call({ subagent_type: TYPE, description: "d" });
+      const plainLines = linesOf(plain);
+      expect(plainLines[0]).toContain(DISPLAY_NAME);
+      expect(plainLines[0]).toContain("<muted>d</muted>");
+      expect(plainLines.slice(1)).toEqual([
+        `<dim>  ⎿  subagent_type: ${TYPE}</dim>`,
+        `<dim>  ⎿  model: inherit</dim>`,
+        `<dim>  ⎿  thinking: inherit</dim>`,
+      ]);
+
+      // Agent frontmatter pins the model and thinking level.
+      registerAgents(new Map([[TYPE, { ...config, model: "anthropic/claude-sonnet-4-6", thinking: "high" }]]));
+      const pinned = call({ subagent_type: TYPE, description: "d" });
+      expect(pinned).toContain("<dim>  ⎿  model: anthropic/claude-sonnet-4-6</dim>");
+      expect(pinned).toContain("<dim>  ⎿  thinking: high</dim>");
+      // A passed model overrides frontmatter...
+      const overridden = call({ subagent_type: TYPE, description: "d", model: "haiku" });
+      expect(overridden).toContain("<dim>  ⎿  model: haiku</dim>");
+      // ...and a blank override counts as not passed, falling back to frontmatter.
+      const blank = call({ subagent_type: TYPE, description: "d", model: "   " });
+      expect(blank).toContain("<dim>  ⎿  model: anthropic/claude-sonnet-4-6</dim>");
+
+      // Every passed parameter renders, in order; the prompt never does.
+      registerAgents(new Map([[TYPE, config]]));
+      const full = call({
+        subagent_type: TYPE,
+        description: "d",
+        name: "audit",
+        model: "haiku",
+        thinking: "low",
+        max_turns: 3,
+        max_context_length: 50000,
+        resume: "abc",
+        isolated: false,
+        inherit_context: false,
+      });
+      const lines = linesOf(full);
+      expect(lines).toHaveLength(10);
+      expect(lines[1]).toContain("subagent_type: colored-reviewer");
+      expect(lines[2]).toContain("name: audit");
+      expect(lines[3]).toContain("model: haiku");
+      expect(lines[4]).toContain("thinking: low");
+      expect(lines[5]).toContain("max_turns: 3");
+      expect(lines[6]).toContain("max_context_length: 50000");
+      expect(lines[7]).toContain("resume: abc");
+      expect(lines[8]).toContain("isolated: false");
+      expect(lines[9]).toContain("inherit_context: false");
+      expect(full).not.toContain("schedule");
+      expect(full).not.toContain("prompt");
+
+      // A parent model/thinking reported via model_select warms the inherit fallback.
+      await handlers.get("model_select")?.({ model: { provider: "anthropic", id: "claude-haiku-4-5" } }, undefined);
+      await handlers.get("thinking_level_select")?.({ level: "medium" }, undefined);
+      const inherited = call({ subagent_type: TYPE, description: "d" });
+      expect(inherited).toContain("<dim>  ⎿  model: anthropic/claude-haiku-4-5</dim>");
+      expect(inherited).toContain("<dim>  ⎿  thinking: medium</dim>");
     } finally {
       await handlers.get("session_shutdown")?.({}, { hasUI: false, ui: {} });
     }

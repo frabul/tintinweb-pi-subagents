@@ -60,4 +60,29 @@ describe("Agent tool invocation error rendering", () => {
     expect(output).toContain("Unstructured Agent result.");
     expect(output).not.toContain("Aborted (max turns exceeded)");
   });
+
+  it("always shows the resolved model on the background and completed cards", () => {
+    const base = {
+      displayName: "Reviewer",
+      description: "d",
+      subagentType: "reviewer",
+      toolUses: 0,
+      tokens: "",
+      durationMs: 1000,
+      resolvedModel: "anthropic/claude-haiku-4-5",
+    };
+    const background = render(agentTool(), {
+      content: [{ type: "text", text: "Agent started in background." }],
+      isError: false,
+      details: { ...base, status: "background" as const },
+    });
+    expect(background).toContain("model: anthropic/claude-haiku-4-5");
+
+    const completed = render(agentTool(), {
+      content: [{ type: "text", text: "Agent completed." }],
+      isError: false,
+      details: { ...base, status: "completed" as const },
+    });
+    expect(completed).toContain("model: anthropic/claude-haiku-4-5");
+  });
 });
