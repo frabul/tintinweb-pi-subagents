@@ -47,6 +47,7 @@ import {
   buildInvocationTags,
   fgPreservingNestedStyles,
   formatCost,
+  formatCount,
   formatDuration,
   formatMs,
   formatTokens,
@@ -60,7 +61,7 @@ import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
 import { renderWorkflowCard, renderWorkflowEntryCard } from "./ui/workflow-card.js";
 import { openWorkflowFromFleet, showWorkflowsMenu, type WorkflowMenuDeps } from "./ui/workflow-menu.js";
-import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, PendingUsagePool, toReportedUsage } from "./usage.js";
+import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextLength, type LifetimeUsage, PendingUsagePool, toReportedUsage } from "./usage.js";
 import { decideWorkflowCollision, FOREIGN_WORKFLOW_TOOL_NAMES } from "./workflow/collisions.js";
 import { WORKFLOW_ENTRY_TYPE, type WorkflowEntryData, workflowEntryData } from "./workflow/entry.js";
 import { createWorkflowHost } from "./workflow/host.js";
@@ -159,8 +160,8 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number, showC
   const status = getStatusLabel(record.status, record.error, record.limitReason);
   const durationMs = record.completedAt ? record.completedAt - record.startedAt : 0;
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
-  const contextPercent = getSessionContextPercent(record.session);
-  const ctxXml = contextPercent !== null ? `<context_percent>${Math.round(contextPercent)}</context_percent>` : "";
+  const contextTokens = getSessionContextLength(record.session);
+  const ctxXml = contextTokens ? `<context_tokens>${contextTokens}</context_tokens>` : "";
   const compactXml = record.compactionCount ? `<compactions>${record.compactionCount}</compactions>` : "";
   // Only under `showCost`: this is LLM context, and a figure the orchestrator
   // did not ask for is a figure it may start reporting unprompted.
@@ -275,7 +276,7 @@ export function agentsMenuTitle(agents: { lifetimeUsage: LifetimeUsage; toolUses
   if (sessionTokens > 0) sessionParts.push(formatTokens(sessionTokens));
   const sessionCost = formatCost(getLifetimeCost(sessionUsage));
   if (sessionCost) sessionParts.push(sessionCost);
-  if (sessionToolUses > 0) sessionParts.push(`${sessionToolUses} tool use${sessionToolUses === 1 ? "" : "s"}`);
+  if (sessionToolUses > 0) sessionParts.push(`󱁤 ${sessionToolUses}`);
   if (sessionParts.length > 0) lines.push(`  Session total: ${sessionParts.join(" · ")}`);
 
   const allTime = getAllTimeStats();
@@ -284,7 +285,7 @@ export function agentsMenuTitle(agents: { lifetimeUsage: LifetimeUsage; toolUses
   if (allTokens > 0) allParts.push(formatTokens(allTokens));
   const allCost = formatCost(getLifetimeCost(allTime.lifetimeUsage));
   if (allCost) allParts.push(allCost);
-  if (allTime.toolUses > 0) allParts.push(`${allTime.toolUses} tool use${allTime.toolUses === 1 ? "" : "s"}`);
+  if (allTime.toolUses > 0) allParts.push(`󱁤 ${allTime.toolUses}`);
   if (allTime.runs > 0) allParts.push(`${allTime.runs} run${allTime.runs === 1 ? "" : "s"}`);
   if (allTime.durationMs > 0) allParts.push(formatMs(allTime.durationMs));
   if (allParts.length > 0) lines.push(`  All-time total: ${allParts.join(" · ")}`);
@@ -329,7 +330,7 @@ export default function (pi: ExtensionAPI) {
         // Line 2: stats
         const parts: string[] = [];
         if (d.turnCount > 0) parts.push(formatTurns(d.turnCount, d.maxTurns));
-        if (d.toolUses > 0) parts.push(`${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}`);
+        if (d.toolUses > 0) parts.push(`󱁤 ${d.toolUses}`);
         if (d.totalTokens > 0) parts.push(formatTokens(d.totalTokens));
         if (showCost) {
           const costText = formatCost(d.totalCost ?? 0);
@@ -1304,7 +1305,7 @@ export default function (pi: ExtensionAPI) {
 
     const { state: bgState, callbacks: bgCallbacks } = createActivityTracker(opts.maxTurns);
     // resumeAgent has no onSessionCreated — the session predates this run —
-    // so seed it directly, or the widget shows no context % for the agent.
+    // so seed it directly, or the widget shows no context tokens for the agent.
     bgState.session = existing.session;
 
     // No `signal`: a background spawn deliberately omits it, and a detached
@@ -1678,7 +1679,7 @@ Do directly:
         if (d.turnCount != null && d.turnCount > 0) {
           parts.push(formatTurns(d.turnCount, d.maxTurns));
         }
-        if (d.toolUses > 0) parts.push(`${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}`);
+        if (d.toolUses > 0) parts.push(`󱁤 ${d.toolUses}`);
         if (d.tokens) parts.push(d.tokens);
         if (showCost) {
           const costText = formatCost(d.cost ?? 0);
@@ -2581,14 +2582,14 @@ Do directly:
       const displayName = getDisplayName(record.type);
       const duration = formatDuration(record.startedAt, record.completedAt);
       const tokens = formatLifetimeTokens(record);
-      const contextPercent = getSessionContextPercent(record.session);
+      const contextTokens = getSessionContextLength(record.session);
       const statsParts = [`Tool uses: ${record.toolUses}`];
       if (tokens) statsParts.push(tokens);
       if (showCost) {
         const costText = formatCost(getLifetimeCost(record.lifetimeUsage));
         if (costText) statsParts.push(`Cost: ${costText}`);
       }
-      if (contextPercent !== null) statsParts.push(`Context: ${Math.round(contextPercent)}%`);
+      if (contextTokens) statsParts.push(`Context: 📜${formatCount(contextTokens)}`);
       if (record.compactionCount) statsParts.push(`Compactions: ${record.compactionCount}`);
       statsParts.push(`Duration: ${duration}`);
 
@@ -2660,7 +2661,7 @@ Do directly:
         await steerAgent(record.session, params.message);
         pi.events.emit("subagents:steered", { id: record.id, message: params.message });
         const tokens = formatLifetimeTokens(record);
-        const contextPercent = getSessionContextPercent(record.session);
+        const contextTokens = getSessionContextLength(record.session);
         const stateParts: string[] = [];
         if (tokens) stateParts.push(tokens);
         if (showCost) {
@@ -2668,7 +2669,7 @@ Do directly:
           if (costText) stateParts.push(costText);
         }
         stateParts.push(`${record.toolUses} tool ${record.toolUses === 1 ? "use" : "uses"}`);
-        if (contextPercent !== null) stateParts.push(`context ${Math.round(contextPercent)}% full`);
+        if (contextTokens) stateParts.push(`📜${formatCount(contextTokens)}`);
         if (record.compactionCount) stateParts.push(`${record.compactionCount} compaction${record.compactionCount === 1 ? "" : "s"}`);
         return textResult(
           `Steering message sent to agent ${record.id}. The agent will process it after its current tool execution.\n` +

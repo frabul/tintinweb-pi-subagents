@@ -158,13 +158,13 @@ describe("ConversationViewer cost display", () => {
     // The viewer opens on finished agents, whose live activity entry is gone —
     // so this reads the record, and would show nothing if it did not.
     const out = header(true, 0.0042);
-    expect(out).toContain("1.6k token");
+    expect(out).toContain("🚀1.6k");
     expect(out).toContain("~$0.0042");
   });
 
   it("shows no cost when disabled", () => {
     const out = header(false, 0.0042);
-    expect(out).toContain("1.6k token");
+    expect(out).toContain("🚀1.6k");
     expect(out).not.toContain("$");
   });
 

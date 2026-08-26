@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Restyle the per-agent token readout.** `formatSessionTokens` now prefixes the total with `🚀` (dropping the trailing " token" word), joins the context (`📜NNk`) and compaction (`🗜N`) annotations with ` . ` instead of ` · ` inside parens, and swaps the compaction glyph from `⇊` to `🗜`. Purely visual; the underlying numbers are unchanged. Updated the README widget example and the `formatSessionTokens` docstring to match.
+- **Replace the "N tool use(s)" readout with the `󱁤 N` glyph.** All visible tool-use counters (widget running/finished rows, `/agents` menu session + all-time totals, and the notification stats line) now render `󱁤 <count>` instead of `<count> tool use(s)`. Purely visual; counts unchanged. Updated the README widget/status-table examples and `agents-menu-title` tests to match. Prose, prompt text, and historical CHANGELOG entries left untouched.
+
 ## [0.19.0] - 2026-08-25
 
 > **⚠️ Breaking — this release requires pi 0.84.0 or newer** (`peerDependencies` moves from `>=0.81.0`). `SubagentWorkflow` needs two host APIs that do not exist below it, and both fail the typecheck rather than degrading quietly — see the `Changed` entry below for which, and why neither was worth reimplementing to hold the old floor. npm flags an older pi at install time.

@@ -10,7 +10,7 @@ import { renderAgentName } from "../agent-color.js";
 import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
 import { getConfig } from "../agent-types.js";
 import type { AgentInvocation, SubagentType, WidgetMode } from "../types.js";
-import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.js";
+import { getLifetimeCost, getLifetimeTotal, getSessionContextLength, type LifetimeUsage, type SessionLike } from "../usage.js";
 
 // ---- Constants ----
 
@@ -132,33 +132,42 @@ export function formatCost(cost: number): string {
   return `~$${rounded.toFixed(Math.max(2, decimals))}`;
 }
 
+/** Format a raw count compactly: "120k", "1.2M". */
+export function formatCount(count: number): string {
+  if (count >= 1_000_000) {
+    const fixed = (count / 1_000_000).toFixed(1);
+    return `${fixed.endsWith(".0") ? fixed.slice(0, -2) : fixed}M`;
+  }
+  if (count >= 1_000) {
+    const fixed = (count / 1_000).toFixed(1);
+    return `${fixed.endsWith(".0") ? fixed.slice(0, -2) : fixed}k`;
+  }
+  return `${count}`;
+}
+
 /**
- * Token count with optional context-fill % and compaction-count annotations.
- * Thresholds for percent: <70% dim, 70–85% warning, ≥85% error.
- * Compaction count rendered as `⇊N` in dim.
- *
- *   "12.3k token"               — no annotations
- *   "12.3k token (45%)"         — percent only
- *   "12.3k token (⇊2)"          — compactions only (e.g. right after compact)
- *   "12.3k token (45% · ⇊2)"    — both
+ * Token count with optional context length and compaction-count annotations.
+ *   "🚀12.3k"                      — no annotations
+ *   "🚀12.3k . 📜120k"           — context only
+ *   "🚀12.3k . 🗜2"              — compactions only
+ *   "🚀12.3k . 📜120k . 🗜2"     — both
  */
 export function formatSessionTokens(
   tokens: number,
-  percent: number | null,
+  contextTokens: number | null,
   theme: Theme,
   compactions = 0,
 ): string {
-  const tokenStr = formatTokens(tokens);
+  const tokenStr = `🚀${formatCount(tokens)}`;
   const annot: string[] = [];
-  if (percent !== null) {
-    const color = percent >= 85 ? "error" : percent >= 70 ? "warning" : "dim";
-    annot.push(theme.fg(color, `${Math.round(percent)}%`));
+  if (contextTokens !== null) {
+    annot.push(theme.fg("dim", `📜${formatCount(contextTokens)}`));
   }
   if (compactions > 0) {
-    annot.push(theme.fg("dim", `⇊${compactions}`));
+    annot.push(theme.fg("dim", `🗜${compactions}`));
   }
   if (annot.length === 0) return tokenStr;
-  return `${tokenStr} (${annot.join(" · ")})`;
+  return [tokenStr, ...annot].join(" . ");
 }
 
 /** Format turn count with optional max limit: "↻5≤30" or "↻5". */
@@ -389,7 +398,7 @@ export class AgentWidget {
     const parts: string[] = [];
     const activity = this.agentActivity.get(a.id);
     if (activity) parts.push(formatTurns(activity.turnCount, activity.maxTurns));
-    if (a.toolUses > 0) parts.push(`${a.toolUses} tool use${a.toolUses === 1 ? "" : "s"}`);
+    if (a.toolUses > 0) parts.push(`󱁤 ${a.toolUses}`);
     // From the record, not the activity tracker: that entry is deleted the
     // moment an agent finishes, and "what did it cost" is a question asked
     // about finished agents.
@@ -447,8 +456,8 @@ export class AgentWidget {
       // folds a hidden child's spend into. Reading the tracker while an agent
       // runs and the record once it stops made the figure jump at completion.
       const tokens = getLifetimeTotal(a.lifetimeUsage);
-      const contextPercent = getSessionContextPercent(bg?.session);
-      const tokenText = tokens > 0 ? formatSessionTokens(tokens, contextPercent, theme, a.compactionCount) : "";
+      const contextTokens = getSessionContextLength(bg?.session);
+      const tokenText = tokens > 0 ? formatSessionTokens(tokens, contextTokens || null, theme, a.compactionCount) : "";
       const costText = this.showCost() ? formatCost(getLifetimeCost(a.lifetimeUsage)) : "";
 
       const parts: string[] = [];
@@ -462,7 +471,7 @@ export class AgentWidget {
         if (thinkingTag) parts.push(thinkingTag);
       }
       if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
-      if (toolUses > 0) parts.push(`${toolUses} tool use${toolUses === 1 ? "" : "s"}`);
+      if (toolUses > 0) parts.push(`󱁤 ${toolUses}`);
       if (tokenText) parts.push(tokenText);
       if (costText) parts.push(costText);
       parts.push(elapsed);
