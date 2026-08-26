@@ -297,18 +297,14 @@ function parseMemory(val: unknown): MemoryScope | undefined {
 /**
  * Parse the `isolation` frontmatter field.
  *
- * `off` is kept as a value rather than folded into `undefined` because the two
- * do not mean the same thing here: agent config outranks tool-call params, so
- * `off` vetoes a caller's `worktree` while an absent field lets it through.
- *
- * pi's frontmatter parser is not YAML 1.1 — bare `off` and `no` arrive as
- * strings and only `false` becomes a boolean — so all three spellings are
- * accepted rather than leaving an author's intent silently dropped. Anything
- * else stays `undefined`, as before.
+ * Worktree isolation is configured exclusively in frontmatter, and only
+ * `"worktree"` opts in. With no caller-facing `isolation` parameter there is
+ * no caller request to veto, so `off`/`none`/`no`/`false` all simply mean "no
+ * worktree" — the same as omitting the field — and are folded into `undefined`
+ * rather than kept as a distinct value. Anything else stays `undefined` too.
  */
 function parseIsolation(val: unknown): IsolationMode | undefined {
   if (val === "worktree") return "worktree";
-  if (val === "off" || val === "none" || val === "no" || val === false) return "off";
   return undefined;
 }
 

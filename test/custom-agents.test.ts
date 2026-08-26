@@ -848,29 +848,16 @@ Bad isolation.`);
     expect(result.get("bad-isolation")!.isolation).toBeUndefined();
   });
 
-  // `isolation: off` is a veto, not a synonym for omitting the field: agent
-  // config outranks tool-call params, so it turns a caller's "worktree" back
-  // off. That is why it must survive parsing as "off" rather than undefined.
-  it("parses isolation: off", () => {
-    writeAgent("no-wt", `---
-description: Never worktree
-isolation: off
----
-
-No worktree.`);
-
-    const result = loadCustomAgents(tmpDir);
-    expect(result.get("no-wt")!.isolation).toBe("off");
-  });
-
-  // pi's frontmatter parser is not YAML 1.1, so bare `off`/`no` stay strings
-  // and only `false` becomes a boolean — accept the spellings an author is
-  // likely to reach for rather than silently dropping them.
+  // Worktree isolation is configured exclusively in frontmatter and only
+  // `worktree` opts in. There is no caller-facing `isolation` parameter to
+  // veto, so the old refusal spellings (`off`, `none`, `no`, `false`) simply
+  // mean "no worktree" — the same as omitting the field.
   it.each([
+    ["off", "isolation: off"],
     ["false", "isolation: false"],
     ["none", "isolation: none"],
     ["no", "isolation: no"],
-  ])("accepts %s as a spelling of off", (name, line) => {
+  ])("treats %s as an omitted isolation field", (name, line) => {
     writeAgent(`off-${name}`, `---
 ${line}
 ---
@@ -878,7 +865,7 @@ ${line}
 Off.`);
 
     const result = loadCustomAgents(tmpDir);
-    expect(result.get(`off-${name}`)!.isolation).toBe("off");
+    expect(result.get(`off-${name}`)!.isolation).toBeUndefined();
   });
 
   // A YAML error in one file used to escape loadFromDir and abort the whole

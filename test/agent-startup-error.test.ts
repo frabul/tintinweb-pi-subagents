@@ -7,7 +7,7 @@
  * discarded), so a returned diagnostic reaches the parent model as a subagent
  * that ran and reported this — and the model retries the same doomed call.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,6 +63,13 @@ describe("Agent startup failures fail the tool call (#179)", () => {
     originalHome = process.env.HOME;
     process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
     process.env.HOME = cwd;
+    // Worktree isolation is frontmatter-only: the spawn below requests it via
+    // the agent file, not a tool parameter.
+    mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".pi", "agents", "wt.md"),
+      `---\ndescription: Worktree probe\nisolation: worktree\n---\n\nWork in a worktree.`,
+    );
   });
 
   afterEach(() => {
@@ -85,8 +92,7 @@ describe("Agent startup failures fail the tool call (#179)", () => {
           {
             prompt: "do it",
             description: "worktree probe",
-            subagent_type: "general-purpose",
-            isolation: "worktree",
+            subagent_type: "wt",
             run_in_background: background,
           },
           undefined, undefined, ctx(),

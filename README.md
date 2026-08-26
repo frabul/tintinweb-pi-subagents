@@ -305,7 +305,7 @@ All fields are optional — sensible defaults for everything.
 | `skills` | `true` | `true` inherits the parent's skills; `false` inherits none. A comma-separated list preloads **only** those skills into the system prompt and does not inherit the rest (see [Skill Preloading](#skill-preloading) for discovery locations) |
 | `memory` | — | Persistent agent memory scope: `project`, `local`, or `user`. Auto-detects read-only agents |
 | `disallowed_tools` | — | Comma-separated tools to deny even if extensions provide them |
-| `isolation` | — | Set to `worktree` to run in an isolated git worktree, or `off` to refuse one even when the caller passes `isolation: "worktree"` (frontmatter is authoritative). `none`, `no`, and `false` are accepted spellings of `off` |
+| `isolation` | — | Set to `worktree` to run in an isolated git worktree; omitted (or anything else) means no worktree |
 | `model` | inherit parent | Default model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`). An `Agent` call's `model` parameter overrides this default. Resolved tolerantly (`.`/`-` and a trailing date stamp are interchangeable) and falls back to the same model under another provider if the named one doesn't have it |
 | `thinking` | inherit | off, minimal, low, medium, high, xhigh, max — actual availability depends on your pi version and model; pi clamps unsupported levels down |
 | `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
@@ -318,7 +318,7 @@ All fields are optional — sensible defaults for everything.
 | `isolated` | `false` | Hermetic specialist mode: forces `extensions: false` + `skills: false` + drops `ext:` selectors. Only built-in tools. Distinct from `isolation: worktree` (filesystem) |
 | `enabled` | `true` | Set to `false` to disable an agent (useful for hiding a default agent per-project) |
 
-Frontmatter supplies each agent's defaults. Its `thinking`, `max_turns`, `inherit_context`, `isolated`, and `isolation` values are locked when set. `model` is the deliberate exception: an explicit `Agent` tool `model` parameter overrides the frontmatter default; omit it to use the agent's `model:` (or the parent model when neither is set). Other `Agent` parameters fill fields the agent config leaves unspecified. All agents run detached.
+Worktree isolation is configured exclusively in agent frontmatter — the `Agent` tool has no `isolation` parameter. For other execution settings, frontmatter is authoritative: its `thinking`, `max_turns`, `inherit_context`, and `isolated` values are locked when set. `model` is the deliberate exception: an explicit `Agent` tool `model` parameter overrides the frontmatter default; omit it to use the agent's `model:` (or the parent model when neither is set). Other `Agent` parameters fill fields the agent config leaves unspecified. All agents run detached.
 
 **Forgiving `model:` resolution.** A `model:` pin is matched against pi's model registry tolerantly, so cosmetic id variations don't silently drop the agent back to the parent's model: `.` and `-` are treated as equivalent in version numbers (`claude-haiku-4.5` ≡ `claude-haiku-4-5`), a trailing `-YYYYMMDD` date stamp is optional (`anthropic/claude-haiku-4-5-20251001` matches an undated registry id and vice-versa), and a `provider/modelId` whose named provider doesn't carry that model retries the bare id against every provider. Precedence is **exact → fuzzy under the named provider → same model under any provider → unavailable**, so an exact match always wins and dated snapshots aren't conflated. If nothing resolves, the pin can't run and the agent inherits the parent model — `/agents → Agent types` flags this case as `(unavailable, fallback: inherit)` and shows the resolved target `(→ provider/id)` when resolution lands on a different provider or version than configured. (This is distinct from [Model Scope](#model-scope) enforcement, which matches the `enabledModels` allowlist by *exact* entry.)
 
@@ -410,7 +410,6 @@ Launch a sub-agent.
 | `max_turns` | number | no | Max agentic turns. Omit for unlimited (default) |
 | `resume` | string | no | Agent ID to resume a previous session |
 | `isolated` | boolean | no | No extension/MCP tools |
-| `isolation` | `"off"` \| `"worktree"` | no | `worktree` runs in an isolated git worktree; `off` (the default) does not. Absent from the schema entirely when `worktreeIsolation: false` |
 | `inherit_context` | boolean | no | Fork parent conversation into agent |
 
 ### `SubagentWorkflow`
@@ -618,7 +617,7 @@ Runtime tuning values set via `/agents` → Settings (max concurrency, default m
 
 **Output transcript** (`outputTranscript`, default `true`): the project/global default for writing each subagent's `.output` transcript. Toggle via `/agents → Settings → Output transcript`, or set `false` in `subagents.json` to make transcripts opt-in project-wide — useful when run transcripts shouldn't sit on disk for backup or DLP tooling to pick up. A custom agent's `output_transcript` frontmatter overrides this per agent. Applied live at spawn time. Governs only the transcript, not `persist_session`, worktree commits, or memory files.
 
-**Worktree isolation** (`worktreeIsolation`, default `true`): whether `isolation: "worktree"` may create a worktree at all. Toggle via `/agents → Settings → Worktree isolation`, or set `false` in `subagents.json` on a repo where a copy costs too much time or disk. Off, the `Agent` tool's `isolation` parameter is dropped from the schema entirely and the bullet describing it leaves the tool description with it — nothing to pass, and no context spent describing it — and worktrees are refused on every other path too (agent files, scheduled jobs, cross-extension RPC). The `/agents` agent-file generator stops offering the `isolation:` frontmatter field too, so a generated agent can't bake in a request that would be refused. A requested worktree is downgraded to a normal run rather than failing the call, since declining one is the point; there is deliberately no note on the result, which is exactly why the prose has to go when the parameter does. The refusal applies immediately; the parameter and its prose appear or disappear on the next pi session. See [Turning worktrees off](#turning-worktrees-off).
+**Worktree isolation** (`worktreeIsolation`, default `true`): whether `isolation: "worktree"` may create a worktree at all. Toggle via `/agents → Settings → Worktree isolation`, or set `false` in `subagents.json` on a repo where a copy costs too much time or disk. Off, worktree creation is refused on every path — agent frontmatter, scheduled jobs, and cross-extension RPC — and the `/agents` agent-file generator stops offering the `isolation:` frontmatter field, so a generated agent can't bake in a request that would be refused. A requested worktree is downgraded to a normal run rather than failing the call, since declining one is the point; there is deliberately no note on the result. The refusal applies immediately.
 
 **Report usage to session** (`reportUsage`, default `false`): whether subagent spend is added to *this* session's own totals. Subagents run in their own pi sessions, so by default pi's footer, statusline and `/cost` count only what the main model spent — a session that delegated most of its work reads as nearly free. Turn it on and each `Agent` / `get_subagent_result` / `steer_subagent` result carries the spend accumulated since the last one, which pi folds into `getSessionStats()`; `/cost` attributes it to the **Tools/summaries** bucket. Toggle via `/agents → Settings → Report usage to session`; applied live.
 
@@ -684,7 +683,7 @@ Launch an autonomous agent. Available types:
 Custom agents live in .pi/agents/ or {{agentDir}}/agents/.
 ```
 
-Placeholders: `{{typeList}}` (full per-agent descriptions), `{{compactTypeList}}` (first sentence each), `{{agentDir}}`, `{{isolationGuideline}}` and `{{scheduleGuideline}}` (each expands with its own leading newline + `- ` bullet when the matching feature is on — place them directly after your last rule line; empty when [worktree isolation](#turning-worktrees-off) / scheduling is off). Unknown placeholders are left verbatim with a stderr warning; a missing or empty file falls back to `"full"` with a warning. Note the usual trust umbrella: a project-level file shapes the orchestrator's prompt, same as project agents and extensions do.
+Placeholders: `{{typeList}}` (full per-agent descriptions), `{{compactTypeList}}` (first sentence each), `{{agentDir}}`, and `{{scheduleGuideline}}` (expands with its own leading newline + `- ` bullet when scheduling is on — place it directly after your last rule line; empty when scheduling is off). Unknown placeholders are left verbatim with a stderr warning; a missing or empty file falls back to `"full"` with a warning. Note the usual trust umbrella: a project-level file shapes the orchestrator's prompt, same as project agents and extensions do.
 
 **Starting point:** copy [`examples/agent-tool-description.md`](examples/agent-tool-description.md) — it reproduces the default full description exactly (a CI test keeps it in sync), so you can trim from a known-good baseline instead of writing from scratch.
 
@@ -838,10 +837,12 @@ The `disallowed_tools` field is respected when determining write capability — 
 
 ## Worktree Isolation
 
-Set `isolation: worktree` to run an agent in a temporary git worktree:
+Set `isolation: worktree` in a custom agent's frontmatter to run that agent in a temporary git worktree:
 
-```
-Agent({ subagent_type: "refactor", prompt: "...", isolation: "worktree" })
+```yaml
+---
+isolation: worktree
+---
 ```
 
 The agent gets a full, isolated copy of the repository. The worktree directory is removed on completion either way — what differs is whether a branch is left behind:
@@ -853,19 +854,16 @@ The agent's system prompt names the worktree as an isolated copy and tells it to
 
 The automatic preservation commit uses `--no-verify`, so local pre-commit hooks can't block it — the commit is local-only and never pushed, and pre-push/server-side hooks still apply.
 
-If the worktree cannot be created (not a git repo, no commits, or `git worktree add` fails), the `Agent` call fails with a clear error instead of running unisolated — `isolation: "worktree"` is a strict guarantee, not a hint. The call is reported as a failed tool call, not as a subagent that ran and returned that message, so the model doesn't retry it as if the agent had merely reported a problem. Initialize git and commit at least once, or omit `isolation`.
+If the worktree cannot be created (not a git repo, no commits, or `git worktree add` fails), the `Agent` call fails with a clear error instead of running unisolated — `isolation: "worktree"` is a strict guarantee, not a hint. The call is reported as a failed tool call, not as a subagent that ran and returned that message, so the model doesn't retry it as if the agent had merely reported a problem. Initialize git and commit at least once, or remove `isolation` from the agent frontmatter.
 
 A worktree is a *copy*, so the agent cannot see uncommitted or staged changes in the main checkout. Never use it to review a working-tree or staged diff: the agent finds an empty `git diff` and reports nothing wrong.
 
 ### Turning worktrees off
 
-Three levers, from narrowest to broadest:
+Two levers, from narrowest to broadest:
 
-- **Per call** — omit `isolation`, or pass `isolation: "off"`. The explicit value exists because some models fill every optional parameter they are offered; with `worktree` as the only legal value they had no way to decline one (#231, #184).
-- **Per agent** — `isolation: off` in an agent file. Frontmatter is authoritative, so this refuses a worktree even when the caller passes `isolation: "worktree"` — the only way to override a caller.
-- **Per project** — `"worktreeIsolation": false` in `subagents.json`. The `Agent` tool's `isolation` parameter disappears from the schema entirely, along with the usage-note bullet that describes it (so it costs the model no context and cannot be passed), and worktree creation is refused on every other path too: agent files, scheduled jobs, and cross-extension RPC. The `/agents` generator also stops offering `isolation:` when writing a new agent file. Use it on a repo large enough that a copy costs real time and disk. The schema and the description are both built at tool registration, so they appear or disappear in the next pi session; the refusal itself takes effect immediately.
-
-  Schema and prose are gated together on purpose. Leaving the bullet in would teach the model to pass a field that is no longer declared — accepted silently, then dropped — and since a refused worktree carries no note on the result, the model would have every reason to go on reporting a `pi-agent-*` branch that was never created. A custom tool description should use the `{{isolationGuideline}}` placeholder rather than hardcoding the bullet, for the same reason.
+- **Per agent** — omit `isolation` from the agent file. Frontmatter supplies worktree isolation exclusively, so an agent without `isolation: worktree` never runs in a worktree.
+- **Per project** — `"worktreeIsolation": false` in `subagents.json`. Worktree creation is refused on every path — agent frontmatter, scheduled jobs, and cross-extension RPC — and the `/agents` generator stops offering `isolation:` when writing a new agent file. Use it on a repo large enough that a copy costs real time and disk. A frontmatter `isolation: worktree` request is downgraded to a normal run rather than failing the call, since declining one is the point; there is deliberately no note on the result. The refusal takes effect immediately.
 
 ## Skill Preloading
 
@@ -942,7 +940,7 @@ src/
   usage.ts            # Token usage shapes, accumulators, session-stats readers
 
   # Invocation surface
-  invocation-config.ts # Shared tool-parameter schemas (isolation, join, thinking, ...)
+  invocation-config.ts # Shared tool-parameter schemas (join, thinking, ...)
   model-resolver.ts   # Model resolution: exact provider/modelId with fuzzy fallback
   enabled-models.ts   # Read pi's enabledModels settings (project over global)
   model-scope.ts      # scopeModels allowlist policy, shared by top-level and nested tools

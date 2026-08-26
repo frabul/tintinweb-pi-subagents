@@ -40,7 +40,6 @@ describe("resolveAgentInvocationConfig", () => {
         inherit_context: true,
         run_in_background: true,
         isolated: true,
-        isolation: "worktree",
       },
     );
 
@@ -62,7 +61,6 @@ describe("resolveAgentInvocationConfig", () => {
       inherit_context: true,
       run_in_background: true,
       isolated: true,
-      isolation: "worktree",
     });
 
     expect(resolved.modelInput).toBe("provider/param-model");
@@ -72,7 +70,8 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.inheritContext).toBe(true);
     expect(resolved.runInBackground).toBe(true);
     expect(resolved.isolated).toBe(true);
-    expect(resolved.isolation).toBe("worktree");
+    // Worktree isolation is frontmatter-only — no param can request it.
+    expect(resolved.isolation).toBeUndefined();
   });
 
   it("lets parent fill in booleans when config leaves them undefined", () => {
@@ -97,12 +96,13 @@ describe("resolveAgentInvocationConfig", () => {
   it("treats blank optional string params as omitted", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({ model: "provider/config-model", thinking: "high", isolation: "worktree" }),
-      { model: "   ", thinking: "", isolation: " " },
+      { model: "   ", thinking: "" },
     );
 
     expect(resolved.modelInput).toBe("provider/config-model");
     expect(resolved.modelFromParams).toBe(false);
     expect(resolved.thinking).toBe("high");
+    // Frontmatter is the only isolation source — it survives unchanged.
     expect(resolved.isolation).toBe("worktree");
     expect(resolved.overridden).toBeUndefined();
   });
@@ -131,28 +131,15 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.isolated).toBe(false);
   });
 
-  // "off" exists so a model that cannot bring itself to omit an optional field
-  // has a legal way to say no (#231). It is an input spelling only — the
-  // resolver collapses it to undefined so no consumer downstream grows a branch.
-  it('collapses a param isolation of "off" to undefined', () => {
-    const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: undefined }), { isolation: "off" });
-    expect(resolved.isolation).toBeUndefined();
-  });
-
-  // Agent config outranks tool-call params, so "off" in frontmatter is the only
-  // way to veto a caller's worktree — before #231 no value could do this.
-  it('lets a config isolation of "off" veto a param "worktree"', () => {
-    const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: "off" }), { isolation: "worktree" });
-    expect(resolved.isolation).toBeUndefined();
-  });
-
-  it('still honours a param "worktree" when the config leaves isolation unset', () => {
-    const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: undefined }), { isolation: "worktree" });
+  // Worktree isolation is configured exclusively in agent frontmatter: the
+  // resolver reads it from agentConfig only and applies the project kill-switch.
+  it('keeps a frontmatter isolation of "worktree"', () => {
+    const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: "worktree" }), {});
     expect(resolved.isolation).toBe("worktree");
   });
 
   it("drops worktree isolation when the project disallows it", () => {
-    const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: "worktree" }), { isolation: "worktree" }, { worktreeAllowed: false });
+    const resolved = resolveAgentInvocationConfig(makeConfig({ isolation: "worktree" }), {}, { worktreeAllowed: false });
     expect(resolved.isolation).toBeUndefined();
   });
 
