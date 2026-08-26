@@ -4,14 +4,15 @@ import { addUsage, getLifetimeCost, getLifetimeTotal, getSessionContextPercent, 
 // Regression for issue #38 — token semantics + context indicator
 describe("usage", () => {
   describe("getSessionTokens", () => {
-    it("uses billed-token semantics (input + output + cacheWrite), not inflated total", () => {
+    it("uses the weighted token score, not upstream's inflated total", () => {
       const session = {
         getSessionStats: () => ({
           tokens: { input: 100, output: 200, cacheRead: 500_000, cacheWrite: 50, total: 500_350 } as any,
           contextUsage: { tokens: 50_300, contextWindow: 200_000, percent: 25 },
         }),
       };
-      expect(getSessionTokens(session)).toBe(350);
+      // 3 × output + input + 0.2 × cacheRead + cacheWrite.
+      expect(getSessionTokens(session)).toBe(100_750);
     });
 
     it("returns 0 when session is undefined or stats throw", () => {
@@ -51,9 +52,12 @@ describe("usage", () => {
   });
 
   describe("getLifetimeTotal", () => {
-    it("sums components and handles undefined", () => {
+    it("weights output and cacheRead, and handles absent optional fields", () => {
       expect(getLifetimeTotal(undefined)).toBe(0);
-      expect(getLifetimeTotal({ input: 100, output: 200, cacheWrite: 50 })).toBe(350);
+      // Missing cacheRead is treated as zero: 3 × 200 + 100 + 50.
+      expect(getLifetimeTotal({ input: 100, output: 200, cacheWrite: 50 })).toBe(750);
+      // 3 × 200 + 100 + 0.2 × 150 + 50.
+      expect(getLifetimeTotal({ input: 100, output: 200, cacheRead: 150, cacheWrite: 50 })).toBe(780);
     });
 
     // getSessionTokens reads upstream session stats (resets at compaction);
@@ -66,28 +70,28 @@ describe("usage", () => {
       };
       const lifetime = { input: 100, output: 200, cacheWrite: 50 };
 
-      expect(getSessionTokens(session)).toBe(350);
-      expect(getLifetimeTotal(lifetime)).toBe(350);
+      expect(getSessionTokens(session)).toBe(750);
+      expect(getLifetimeTotal(lifetime)).toBe(750);
 
       // Compaction: upstream replaces session.state.messages, so stats reset.
       // Our accumulator is independent — it keeps growing.
       sessionStatsTokens = { input: 0, output: 0, cacheWrite: 0 };
 
       expect(getSessionTokens(session)).toBe(0);            // reset
-      expect(getLifetimeTotal(lifetime)).toBe(350);          // preserved
+      expect(getLifetimeTotal(lifetime)).toBe(750);          // preserved
 
       // Subsequent message_end events feed both: session re-fills, accumulator continues
       sessionStatsTokens = { input: 80, output: 150, cacheWrite: 30 };
       lifetime.input += 80; lifetime.output += 150; lifetime.cacheWrite += 30;
 
-      expect(getSessionTokens(session)).toBe(260);           // post-compaction window
-      expect(getLifetimeTotal(lifetime)).toBe(610);          // 350 + 260, monotone
+      expect(getSessionTokens(session)).toBe(560);           // post-compaction window
+      expect(getLifetimeTotal(lifetime)).toBe(1310);         // 750 + 560, monotone
     });
 
     // The accumulator survives compaction because it lives on AgentActivity /
     // AgentRecord, not on session.state.messages (which compaction replaces).
     it("stays monotone across simulated compaction when fed via addUsage-style accumulation", () => {
-      const usage = { input: 0, output: 0, cacheWrite: 0 };
+      const usage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
       const onUsage = (u: { input: number; output: number; cacheWrite: number }) => {
         usage.input += u.input;
         usage.output += u.output;
@@ -96,7 +100,7 @@ describe("usage", () => {
 
       // 5 normal turns
       for (let i = 0; i < 5; i++) onUsage({ input: 1000, output: 200, cacheWrite: 50 });
-      expect(getLifetimeTotal(usage)).toBe(5 * 1250);
+      expect(getLifetimeTotal(usage)).toBe(5 * 1650);
 
       // Compaction would replace session.state.messages, dropping any sum
       // re-derived from it. Our accumulator is independent — no reset.
@@ -104,11 +108,12 @@ describe("usage", () => {
 
       // 3 more turns post-"compaction"
       for (let i = 0; i < 3; i++) onUsage({ input: 800, output: 150, cacheWrite: 30 });
-      expect(getLifetimeTotal(usage)).toBe(beforeCompaction + 3 * 980);
+      expect(getLifetimeTotal(usage)).toBe(beforeCompaction + 3 * 1280);
       expect(getLifetimeTotal(usage)).toBeGreaterThan(beforeCompaction); // monotone
 
-      // input + output + cacheWrite = total — by construction, no drift
-      expect(usage.input + usage.output + usage.cacheWrite).toBe(getLifetimeTotal(usage));
+      // The weighted formula is the single display score — by construction, no drift.
+      expect(3 * usage.output + usage.input + 0.2 * usage.cacheRead + usage.cacheWrite)
+        .toBe(getLifetimeTotal(usage));
     });
   });
 
@@ -119,9 +124,9 @@ describe("usage", () => {
       addUsage(usage, { input: 200, output: 80, cacheWrite: 20, cacheRead: 1800, cost: 0.004 });
 
       expect(getLifetimeCost(usage)).toBeCloseTo(0.006, 10);
-      // The load-bearing half: the display total takes neither the money nor
-      // the re-read prefix, even though both are accumulated on the same object.
-      expect(getLifetimeTotal(usage)).toBe(460);
+      // The load-bearing half: cost remains separate, while cacheRead contributes
+      // at its reduced display weight even though both are accumulated on the same object.
+      expect(getLifetimeTotal(usage)).toBe(1260);
       expect(usage.cacheRead).toBe(2700);
     });
 

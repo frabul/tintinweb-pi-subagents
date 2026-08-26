@@ -212,8 +212,11 @@ export interface AgentRecord {
   outputCleanup?: () => void;
   /**
    * Lifetime usage breakdown, accumulated via `message_end` events. Survives
-   * compaction. Total = input + output + cacheWrite (cacheRead deliberately
-   * excluded — see issue #38). Initialized to zeros at spawn.
+   * compaction. The DISPLAY total is the weighted score
+   * `Math.round(3 * output + input + 0.2 * cacheRead + cacheWrite)`;
+   * `cacheRead` and `cost` remain optional for older records and read as zero
+   * when absent. Cost is reported separately as a plain sum. Required fields
+   * are initialized to zero at spawn; optional fields may be absent.
    */
   lifetimeUsage: LifetimeUsage;
   /** Number of times this agent's session has compacted. Initialized to 0 at spawn. */

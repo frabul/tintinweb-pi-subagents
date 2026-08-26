@@ -77,7 +77,7 @@ describe("cost display", () => {
       expect(text).toContain("~$0.0123");
       // The result header uses labelled pipe-separated fields, while the widget
       // uses middle dots — the separator belongs to the surface.
-      expect(text).toMatch(/1\.2k tokens? \| Cost: ~\$0\.0123/);
+      expect(text).toMatch(/1\.6k tokens? \| Cost: ~\$0\.0123/);
     });
 
     it("says nothing when the setting is off", async () => {
@@ -92,7 +92,7 @@ describe("cost display", () => {
       runSpending(0);
 
       const text = await resultText(tools, await spawn(tools));
-      expect(text).toContain("1.2k token");   // tokens are still exact
+      expect(text).toContain("1.6k token");   // weighted tokens are still exact
       expect(text).not.toContain("$");
     });
   });
