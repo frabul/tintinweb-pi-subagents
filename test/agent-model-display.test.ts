@@ -222,7 +222,7 @@ describe("Agent launch metadata — effective model", () => {
     expect(result.details.tags).toContain("thinking: low (asked max)");
   });
 
-  it("discloses a model an agent file pinned over the caller's (#182)", async () => {
+  it("lets the caller's model override an agent file's default", async () => {
     pinnedAgent("model: anthropic/claude-haiku-4-5\n");
     const tool = agentTool();
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as never);
@@ -241,7 +241,7 @@ describe("Agent launch metadata — effective model", () => {
       ctx(),
     );
 
-    expect(result.details.modelName).toBe("haiku 4.5 (asked anthropic/claude-opus-4-6)");
+    expect(result.details.modelName).toBe("opus 4.6");
   });
 
   it("stays quiet when the caller's spelling names the model that won", async () => {
@@ -263,10 +263,10 @@ describe("Agent launch metadata — effective model", () => {
     expect(result.details.modelName).toBe("haiku 4.5");
   });
 
-  it("discloses a spelling that names no available model at all", async () => {
+  it("fails loudly when a caller model cannot be resolved", async () => {
     pinnedAgent("model: anthropic/claude-haiku-4-5\n");
     const tool = agentTool();
-    vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as never);
+    vi.mocked(runAgent).mockClear();
 
     const result = await tool.execute(
       "tc-5c",
@@ -276,7 +276,8 @@ describe("Agent launch metadata — effective model", () => {
       ctx(),
     );
 
-    expect(result.details.modelName).toBe("haiku 4.5 (asked gpt-9)");
+    expect(result.content[0].text).toContain('Model not found: "gpt-9"');
+    expect(runAgent).not.toHaveBeenCalled();
   });
 
   it("says nothing about a request that was honored", async () => {

@@ -35,7 +35,7 @@ https://github.com/user-attachments/assets/8685261b-9338-4fea-8dfe-1c590d5df543
 - **Event bus** — lifecycle events (`subagents:created`, `started`, `completed`, `failed`, `steered`, `compacted`) emitted via `pi.events`, enabling other extensions to react to sub-agent activity
 - **Cross-extension RPC** — other pi extensions can spawn, stop, and join subagents via the `pi.events` event bus (`subagents:rpc:ping`, `subagents:rpc:spawn`, `subagents:rpc:stop`, `subagents:rpc:consume`). Standardized reply envelopes with protocol versioning. Emits `subagents:ready` on session start. **[Full reference](https://github.com/tintinweb/pi-subagents/blob/master/docs/rpc.md)**
 - **Schedule subagents** — pass `schedule` to the `Agent` tool to fire on cron / interval / one-shot. Session-scoped jobs with PID-locked persistence; results land via the same `subagent-notification` followUp path as manual background completions; manage via `/agents → Scheduled jobs`
-- **Model scope enforcement** — opt-in validation that subagent model choices stay within your pi `enabledModels` allowlist (sourced from `/scoped-models`, with both global and project-local pi settings honored). Caller-supplied out-of-scope → hard error to orchestrator; frontmatter-pinned out-of-scope → warning + runs anyway (frontmatter authoritative). Toggle via `/agents → Settings → Scope models`
+- **Model scope enforcement** — opt-in validation that subagent model choices stay within your pi `enabledModels` allowlist (sourced from `/scoped-models`, with both global and project-local pi settings honored). Caller-supplied out-of-scope → hard error to orchestrator; frontmatter-pinned out-of-scope → warning + runs anyway. Toggle via `/agents → Settings → Scope models`
 
 ## Install
 
@@ -185,7 +185,7 @@ It is a literal clone — the session's own entries and the same system prompt, 
 | `direct` | the agent starts here, immediately, with your message verbatim as its prompt. No model call at all, so no latency before it begins |
 | `off` | `@` means only "attach a file" again |
 
-Either way the started agent honours its own frontmatter — `model:`, `thinking:`, `max_turns:` all apply, since neither path passes them and the agent's config wins. Mentioning something as the very first thing in a session works: there is simply no history to carry, and the clone still runs on your model and system prompt. If it cannot deliver at all — a model can always answer in prose instead of calling the tool — the agent is started directly with your text and the toast says so, rather than leaving you with nothing running.
+Either way the started agent honours its own frontmatter defaults — `model:` applies unless an explicit `Agent` call supplies a model override, while `thinking:` and `max_turns:` remain agent-configured because neither path passes them. Mentioning something as the very first thing in a session works: there is simply no history to carry, and the clone still runs on your model and system prompt. If it cannot deliver at all — a model can always answer in prose instead of calling the tool — the agent is started directly with your text and the toast says so, rather than leaving you with nothing running.
 
 `model` is also the only mode that works outside the TUI: `pi -p '@plan the migration'` clones, spawns, and reports through the normal completion path, where a direct start would have detached the agent and printed nothing. Messaging and resuming stay TUI-only for that reason, in both modes.
 
@@ -306,7 +306,7 @@ All fields are optional — sensible defaults for everything.
 | `memory` | — | Persistent agent memory scope: `project`, `local`, or `user`. Auto-detects read-only agents |
 | `disallowed_tools` | — | Comma-separated tools to deny even if extensions provide them |
 | `isolation` | — | Set to `worktree` to run in an isolated git worktree, or `off` to refuse one even when the caller passes `isolation: "worktree"` (frontmatter is authoritative). `none`, `no`, and `false` are accepted spellings of `off` |
-| `model` | inherit parent | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp are interchangeable) and falls back to the same model under another provider if the named one doesn't have it |
+| `model` | inherit parent | Default model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`). An `Agent` call's `model` parameter overrides this default. Resolved tolerantly (`.`/`-` and a trailing date stamp are interchangeable) and falls back to the same model under another provider if the named one doesn't have it |
 | `thinking` | inherit | off, minimal, low, medium, high, xhigh, max — actual availability depends on your pi version and model; pi clamps unsupported levels down |
 | `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
 | `persist_session` | `subagents.json` `rememberAgents` (default `true`) | Persist this subagent as a normal pi session instead of keeping the session in memory only; overrides the `rememberAgents` project default in both directions. It records its spawning session as parent, so it nests under it in `/resume`. The subagent's `.output` transcript is still written either way unless `output_transcript: false` |
@@ -318,7 +318,7 @@ All fields are optional — sensible defaults for everything.
 | `isolated` | `false` | Hermetic specialist mode: forces `extensions: false` + `skills: false` + drops `ext:` selectors. Only built-in tools. Distinct from `isolation: worktree` (filesystem) |
 | `enabled` | `true` | Set to `false` to disable an agent (useful for hiding a default agent per-project) |
 
-Frontmatter is authoritative. If an agent file sets `model`, `thinking`, `max_turns`, `inherit_context`, `isolated`, or `isolation`, those values are locked for that agent. `Agent` tool parameters only fill fields the agent config leaves unspecified. All agents run detached.
+Frontmatter supplies each agent's defaults. Its `thinking`, `max_turns`, `inherit_context`, `isolated`, and `isolation` values are locked when set. `model` is the deliberate exception: an explicit `Agent` tool `model` parameter overrides the frontmatter default; omit it to use the agent's `model:` (or the parent model when neither is set). Other `Agent` parameters fill fields the agent config leaves unspecified. All agents run detached.
 
 **Forgiving `model:` resolution.** A `model:` pin is matched against pi's model registry tolerantly, so cosmetic id variations don't silently drop the agent back to the parent's model: `.` and `-` are treated as equivalent in version numbers (`claude-haiku-4.5` ≡ `claude-haiku-4-5`), a trailing `-YYYYMMDD` date stamp is optional (`anthropic/claude-haiku-4-5-20251001` matches an undated registry id and vice-versa), and a `provider/modelId` whose named provider doesn't carry that model retries the bare id against every provider. Precedence is **exact → fuzzy under the named provider → same model under any provider → unavailable**, so an exact match always wins and dated snapshots aren't conflated. If nothing resolves, the pin can't run and the agent inherits the parent model — `/agents → Agent types` flags this case as `(unavailable, fallback: inherit)` and shows the resolved target `(→ provider/id)` when resolution lands on a different provider or version than configured. (This is distinct from [Model Scope](#model-scope) enforcement, which matches the `enabledModels` allowlist by *exact* entry.)
 
@@ -583,10 +583,10 @@ When on, each subagent spawn's effective model is validated against pi's own `en
 |---|---|
 | Caller-supplied via `Agent({ model: "..." })` | Hard error returned to the orchestrator, listing allowed models |
 | Caller-supplied via cross-extension RPC (`subagents:rpc:spawn`, e.g. pi-tasks `TaskExecute`) | Hard error returned to the calling extension, listing allowed models |
-| Pinned in agent frontmatter | Warning toast + the pinned model runs (frontmatter is authoritative) |
+| Pinned in agent frontmatter (when no caller override is supplied) | Warning toast + the pinned model runs |
 | Parent-inherited (neither set) | Warning toast + parent's model runs |
 
-**Design:** `scopeModels` is a guardrail against the orchestrator picking unexpected models at runtime, not a hard policy against user-level config. The "frontmatter is authoritative" guarantee from v0.5.1 still holds for `model:` — caller params can't override frontmatter, and frontmatter pins run even when out of scope (with a visible warning).
+**Design:** `scopeModels` is a guardrail against the orchestrator picking unexpected models at runtime, not a hard policy against user-level config. A caller's explicit `model` parameter wins over the agent file's default and is refused when out of scope; when the caller omits it, a frontmatter pin still runs even when out of scope (with a visible warning).
 
 **Nested spawns** ([nested subagents](#nested-subagents)) apply the same table against the parent's config root. The hard-error case is identical; the warning cases proceed silently, since a subagent session has no UI to toast to.
 

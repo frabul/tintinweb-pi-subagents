@@ -1460,7 +1460,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - Use steer_subagent to send mid-run messages to a running background agent.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
-- Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
+- Use model to override the agent type's frontmatter model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet"); omit it to use the type's default.
 - Use thinking to control extended thinking level.
 - Use inherit_context if the agent needs the parent conversation history.${isolationGuideline}${scheduleGuideline}
 
@@ -1558,12 +1558,12 @@ Terse command-style prompts produce shallow, generic work.
       model: Type.Optional(
         Type.String({
           description:
-            'Optional model override. Accepts "provider/modelId" or fuzzy name (e.g. "haiku", "sonnet"). Omit to use the agent type\'s default.',
+            'Optional model override. Accepts "provider/modelId" or fuzzy name (e.g. "haiku", "sonnet"). Overrides the agent type\'s frontmatter model; omit to use the agent type\'s default.',
         }),
       ),
       thinking: Type.Optional(
         Type.String({
-          description: `Thinking level: ${THINKING_LEVELS.join(", ")}. Overrides agent default.`,
+          description: `Thinking level: ${THINKING_LEVELS.join(", ")}. Overrides the inherited default; an agent type's frontmatter value takes precedence when set.`,
         }),
       ),
       max_turns: Type.Optional(
@@ -1743,7 +1743,9 @@ Terse command-style prompts produce shallow, generic work.
         worktreeAllowed: isWorktreeIsolationEnabled(),
       });
 
-      // Resolve model from agent config first; tool-call params only fill gaps.
+      // Resolve the caller's model override first; frontmatter supplies the
+      // default when the caller omits it. A non-empty caller model is always
+      // treated as explicit so an unknown value fails loudly below.
       let model = ctx.model;
       if (resolvedConfig.modelInput) {
         const resolved = resolveModel(resolvedConfig.modelInput, ctx.modelRegistry);
@@ -1791,26 +1793,15 @@ Terse command-style prompts produce shallow, generic work.
       // This is the pre-session snapshot — agent-manager overwrites it with the
       // effective values the moment a session reports them.
       const { modelName, modelId } = model ? describeModel(model) : { modelName: undefined, modelId: undefined };
-      // What the caller SPELLED, kept only if it names a different model than the
-      // one that won. Model input is fuzzy — `"haiku"` and
-      // `"anthropic/claude-haiku-4-5"` are the same model — so comparing the two
-      // strings would disclose an override that never happened. A spelling that
-      // resolves to nothing is still worth disclosing: it cannot have taken effect.
-      const askedModel = ((asked: string | undefined) => {
-        if (!asked) return undefined;
-        const resolvedAsked = resolveModel(asked, ctx.modelRegistry);
-        if (typeof resolvedAsked === "string") return asked;
-        return resolvedAsked.provider === model?.provider && resolvedAsked.id === model?.id ? undefined : asked;
-      })(resolvedConfig.overridden?.model);
       const effectiveMaxTurns = normalizeMaxTurns(resolvedConfig.maxTurns ?? getDefaultMaxTurns());
       const agentInvocation: AgentInvocation = {
         modelName,
         modelId,
         thinking,
-        // Only set where the agent file outranked the caller, so the surfaces can
-        // disclose a parameter that was accepted but could not take effect (#182).
+        // Only set where frontmatter still outranked the caller, so the surfaces
+        // can disclose a parameter that was accepted but could not take effect
+        // (#182). Model is deliberately absent: params.model wins.
         requestedThinking: resolvedConfig.overridden?.thinking,
-        requestedModel: askedModel,
         // Explicit value only — the default fallback would just add noise.
         // Normalize so `0` (unlimited) doesn't surface as a misleading "max turns: 0".
         maxTurns: normalizeMaxTurns(resolvedConfig.maxTurns),
@@ -1882,7 +1873,10 @@ Terse command-style prompts produce shallow, generic work.
             // at fire time, and the original is what a user edits.
             subagent_type: requestedType,
             prompt: params.prompt as string,
-            model: params.model as string | undefined,
+            // Persist only a non-blank caller model. When omitted, the scheduler
+            // re-resolves the agent's frontmatter at fire time; this mirrors the
+            // resolver's blank-string normalization and keeps the default live.
+            model: resolvedConfig.modelFromParams ? resolvedConfig.modelInput : undefined,
             thinking: thinking,
             max_turns: effectiveMaxTurns,
             isolated: isolated,

@@ -101,37 +101,49 @@ export function resolveAgentInvocationConfig(
   isolated: boolean;
   isolation?: IsolationMode;
   /**
-   * Caller parameters an agent file's frontmatter outranked, so the surfaces can
+   * Caller parameters an agent file's frontmatter still outranks for
+   * frontmatter-authoritative fields such as `thinking`, so the surfaces can
    * say "(asked X)" instead of presenting the effective value as the requested
-   * one (#182). Populated only where both sides named something and they
-   * disagree — a caller who asked for what they got was still honored.
+   * one (#182). The `model` member was intentionally dropped: `params.model`
+   * is an explicit override and wins over the agent file's default, so there is
+   * no caller model that can be reported as ignored.
    *
    * `max_turns` is deliberately absent: no surface renders a requested-vs-
    * effective turn limit, so recording one would be dead data.
    */
-  overridden?: { thinking?: ThinkingLevel; model?: string };
+  overridden?: { thinking?: ThinkingLevel };
 } {
-  // Precedence first, collapse second — reversing these loses the veto, since
-  // an agent file's "off" only outranks a caller's "worktree" while it is still
-  // a value. Everything downstream then sees "worktree" or nothing at all.
-  const requested = agentConfig?.isolation ?? params.isolation;
+  // Normalize optional string params before applying precedence. LLMs often
+  // emit blank strings for omitted fields; treating `""` as a real value would
+  // make a blank model look like an explicit override and skip frontmatter.
+  const rawModel = params.model?.trim() || undefined;
+  const rawThinking = params.thinking?.trim() || undefined;
+  const rawIsolation = typeof params.isolation === "string"
+    ? params.isolation.trim() || undefined
+    : params.isolation;
+  // `inherit_context` is boolean in the current schema. Keep unvalidated
+  // compatibility callers from turning a blank string into a truthy setting.
+  const rawInheritContext = typeof params.inherit_context === "boolean"
+    ? params.inherit_context
+    : undefined;
+
+  // The caller's model is the one deliberate exception to frontmatter-first
+  // resolution: `model` is documented as an override, while frontmatter is its
+  // default. Isolation keeps its existing frontmatter veto semantics.
+  const requested = agentConfig?.isolation ?? rawIsolation;
   const isolation = requested === "worktree" && opts?.worktreeAllowed !== false ? "worktree" : undefined;
 
-  const overriddenThinking = agentConfig?.thinking != null && params.thinking != null
-    && agentConfig.thinking !== params.thinking
-    ? params.thinking as ThinkingLevel
-    : undefined;
-  const overriddenModel = agentConfig?.model != null && params.model != null
-    && agentConfig.model !== params.model
-    ? params.model
+  const overriddenThinking = agentConfig?.thinking != null && rawThinking != null
+    && agentConfig.thinking !== rawThinking
+    ? rawThinking as ThinkingLevel
     : undefined;
 
   return {
-    modelInput: agentConfig?.model ?? params.model,
-    modelFromParams: agentConfig?.model == null && params.model != null,
-    thinking: (agentConfig?.thinking ?? params.thinking) as ThinkingLevel | undefined,
+    modelInput: rawModel ?? agentConfig?.model,
+    modelFromParams: rawModel != null,
+    thinking: (agentConfig?.thinking ?? rawThinking) as ThinkingLevel | undefined,
     maxTurns: agentConfig?.maxTurns ?? params.max_turns,
-    inheritContext: agentConfig?.inheritContext ?? params.inherit_context ?? false,
+    inheritContext: agentConfig?.inheritContext ?? rawInheritContext ?? false,
     // Retain the resolved field for invocation snapshots and older callers,
     // but never allow configuration or legacy options to select inline work.
     runInBackground: true,
@@ -140,9 +152,7 @@ export function resolveAgentInvocationConfig(
     // Undefined rather than an empty object when nothing was overridden: callers
     // spread this into the invocation snapshot, and an always-present key would
     // put `requestedThinking: undefined` on every record.
-    overridden: overriddenThinking || overriddenModel
-      ? { thinking: overriddenThinking, model: overriddenModel }
-      : undefined,
+    overridden: overriddenThinking !== undefined ? { thinking: overriddenThinking } : undefined,
   };
 }
 

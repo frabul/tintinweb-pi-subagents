@@ -19,7 +19,10 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 }
 
 describe("resolveAgentInvocationConfig", () => {
-  it("prefers agent config over tool-call params for locked fields", () => {
+  it("lets tool-call params override agent config for model only; other fields stay config-authoritative", () => {
+    // `model` is documented as an explicit override, so the caller wins.
+    // Other fields remain frontmatter-authoritative — only fill gaps when the
+    // config leaves them unspecified.
     const resolved = resolveAgentInvocationConfig(
       makeConfig({
         model: "provider/config-model",
@@ -41,8 +44,8 @@ describe("resolveAgentInvocationConfig", () => {
       },
     );
 
-    expect(resolved.modelInput).toBe("provider/config-model");
-    expect(resolved.modelFromParams).toBe(false);
+    expect(resolved.modelInput).toBe("provider/param-model");
+    expect(resolved.modelFromParams).toBe(true);
     expect(resolved.thinking).toBe("high");
     expect(resolved.maxTurns).toBe(42);
     expect(resolved.inheritContext).toBe(false);
@@ -89,6 +92,28 @@ describe("resolveAgentInvocationConfig", () => {
     expect(resolved.inheritContext).toBe(true);
     expect(resolved.runInBackground).toBe(true);
     expect(resolved.isolated).toBe(true);
+  });
+
+  it("treats blank optional string params as omitted", () => {
+    const resolved = resolveAgentInvocationConfig(
+      makeConfig({ model: "provider/config-model", thinking: "high", isolation: "worktree" }),
+      { model: "   ", thinking: "", isolation: " " },
+    );
+
+    expect(resolved.modelInput).toBe("provider/config-model");
+    expect(resolved.modelFromParams).toBe(false);
+    expect(resolved.thinking).toBe("high");
+    expect(resolved.isolation).toBe("worktree");
+    expect(resolved.overridden).toBeUndefined();
+  });
+
+  it("treats a blank inherit_context param as omitted", () => {
+    const resolved = resolveAgentInvocationConfig(
+      makeConfig({ inheritContext: undefined }),
+      { inherit_context: "" as unknown as boolean },
+    );
+
+    expect(resolved.inheritContext).toBe(false);
   });
 
   it("defaults execution to background when neither config nor params set it", () => {
@@ -146,13 +171,16 @@ describe("resolveJoinMode", () => {
 });
 
 describe("resolveAgentInvocationConfig — overridden params (#182)", () => {
-  it("records the caller's values when the agent file outranks them", () => {
+  it("records only caller values ignored by frontmatter-authoritative fields", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({ model: "provider/config-model", thinking: "low" }),
       { model: "provider/param-model", thinking: "max" },
     );
 
-    expect(resolved.overridden).toEqual({ thinking: "max", model: "provider/param-model" });
+    // The thinking parameter is still ignored when frontmatter sets it. The
+    // model parameter wins, so there is no model value to disclose as ignored.
+    expect(resolved.overridden).toEqual({ thinking: "max" });
+    expect(resolved.modelInput).toBe("provider/param-model");
   });
 
   it("records nothing when the caller got what they asked for", () => {
@@ -178,12 +206,22 @@ describe("resolveAgentInvocationConfig — overridden params (#182)", () => {
     ).overridden).toBeUndefined();
   });
 
-  it("records each field independently", () => {
+  it("records thinking independently from the caller-wins model", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({ thinking: "low" }),
       { model: "provider/param-model", thinking: "max" },
     );
 
-    expect(resolved.overridden).toEqual({ thinking: "max", model: undefined });
+    expect(resolved.overridden).toEqual({ thinking: "max" });
+    expect(resolved.modelInput).toBe("provider/param-model");
+  });
+
+  it("does not record a model override when both sides specify different models", () => {
+    const resolved = resolveAgentInvocationConfig(
+      makeConfig({ model: "provider/config-model" }),
+      { model: "provider/param-model" },
+    );
+
+    expect(resolved.overridden).toBeUndefined();
   });
 });
