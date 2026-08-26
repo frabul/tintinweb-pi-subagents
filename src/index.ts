@@ -259,38 +259,55 @@ export const WORKFLOW_FILE_FLAG = "subagents-workflow-file";
 /**
  * Stats headline for the /agents menu title.
  *
- * 'Session total' (fork fd1e0c4) aggregates the CURRENT records — session-
- * scoped, since clearCompleted() wipes the record list on session boundaries.
- * 'All-time total' reads the permanent store, which accumulates every evicted
- * record's stats (see lifetime-stats.ts). Both use the weighted token formula
- * from Decision 2; cost is formatted separately via formatCost.
+ * Merged total: live records + permanent store (evicted work). Single
+ * `Total:` line replaces the former `Session total` / `All-time total` split
+ * that made `All-time lower than Session` possible while agents were still
+ * live (their stats had not yet been folded on eviction). Weighted token
+ * formula from Decision 2; cost via formatCost.
  */
-export function agentsMenuTitle(agents: { lifetimeUsage: LifetimeUsage; toolUses: number }[]): string {
-  const lines: string[] = [];
-
+export function agentsMenuTitle(
+  agents: { lifetimeUsage: LifetimeUsage; toolUses: number; started?: boolean; startedAt?: number; completedAt?: number }[],
+): string {
   const sessionUsage: LifetimeUsage = { input: 0, output: 0, cacheWrite: 0 };
   for (const a of agents) addUsage(sessionUsage, a.lifetimeUsage);
   const sessionToolUses = agents.reduce((sum, a) => sum + a.toolUses, 0);
-  const sessionParts: string[] = [];
-  const sessionTokens = getLifetimeTotal(sessionUsage);
-  if (sessionTokens > 0) sessionParts.push(formatTokens(sessionTokens));
-  const sessionCost = formatCost(getLifetimeCost(sessionUsage));
-  if (sessionCost) sessionParts.push(sessionCost);
-  if (sessionToolUses > 0) sessionParts.push(`󱁤 ${sessionToolUses}`);
-  if (sessionParts.length > 0) lines.push(`  Session total: ${sessionParts.join(" · ")}`);
+  // Live runs/duration so the merged total already counts running/completed
+  // agents that have not yet been evicted (folded into the store). Agents
+  // without timing info (e.g. test stubs) contribute a run only when they
+  // have work; never-started queued agents (started===false) never count.
+  let liveRuns = 0;
+  let liveDurationMs = 0;
+  for (const a of agents) {
+    if (a.started === false) continue;
+    const hasWork = getLifetimeTotal(a.lifetimeUsage) > 0 || a.toolUses > 0;
+    // Explicit started flag wins; otherwise only count agents that did work
+    // so a zero-usage stub (empty Sessions test) does not produce "1 run".
+    if (a.started === true || (a.started === undefined && hasWork)) liveRuns += 1;
+    else if (a.started === undefined && !hasWork) continue;
+    if (typeof a.startedAt === "number") {
+      const end = typeof a.completedAt === "number" ? a.completedAt : Date.now();
+      liveDurationMs += Math.max(0, end - a.startedAt);
+    }
+  }
 
   const allTime = getAllTimeStats();
-  const allParts: string[] = [];
-  const allTokens = getLifetimeTotal(allTime.lifetimeUsage);
-  if (allTokens > 0) allParts.push(formatTokens(allTokens));
-  const allCost = formatCost(getLifetimeCost(allTime.lifetimeUsage));
-  if (allCost) allParts.push(allCost);
-  if (allTime.toolUses > 0) allParts.push(`󱁤 ${allTime.toolUses}`);
-  if (allTime.runs > 0) allParts.push(`${allTime.runs} run${allTime.runs === 1 ? "" : "s"}`);
-  if (allTime.durationMs > 0) allParts.push(formatMs(allTime.durationMs));
-  if (allParts.length > 0) lines.push(`  All-time total: ${allParts.join(" · ")}`);
+  const combinedUsage: LifetimeUsage = { input: 0, output: 0, cacheWrite: 0 };
+  addUsage(combinedUsage, allTime.lifetimeUsage);
+  addUsage(combinedUsage, sessionUsage);
+  const combinedToolUses = allTime.toolUses + sessionToolUses;
+  const combinedRuns = allTime.runs + liveRuns;
+  const combinedDurationMs = allTime.durationMs + liveDurationMs;
 
-  return lines.length > 0 ? `Agents\n${lines.join("\n")}` : "Agents";
+  const parts: string[] = [];
+  const tokens = getLifetimeTotal(combinedUsage);
+  if (tokens > 0) parts.push(formatTokens(tokens));
+  const cost = formatCost(getLifetimeCost(combinedUsage));
+  if (cost) parts.push(cost);
+  if (combinedToolUses > 0) parts.push(`󱁤 ${combinedToolUses}`);
+  if (combinedRuns > 0) parts.push(`${combinedRuns} run${combinedRuns === 1 ? "" : "s"}`);
+  if (combinedDurationMs > 0) parts.push(formatMs(combinedDurationMs));
+  if (parts.length === 0) return "Agents";
+  return `Agents\n  Total: ${parts.join(" · ")}`;
 }
 
 /**

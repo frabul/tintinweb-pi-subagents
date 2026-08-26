@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Restyle the per-agent token readout.** `formatSessionTokens` now prefixes the total with `🚀` (dropping the trailing " token" word), joins the context (`📜NNk`) and compaction (`🗜N`) annotations with ` . ` instead of ` · ` inside parens, and swaps the compaction glyph from `⇊` to `🗜`. Purely visual; the underlying numbers are unchanged. Updated the README widget example and the `formatSessionTokens` docstring to match.
 - **Replace the "N tool use(s)" readout with the `󱁤 N` glyph.** All visible tool-use counters (widget running/finished rows, `/agents` menu session + all-time totals, and the notification stats line) now render `󱁤 <count>` instead of `<count> tool use(s)`. Purely visual; counts unchanged. Updated the README widget/status-table examples and `agents-menu-title` tests to match. Prose, prompt text, and historical CHANGELOG entries left untouched.
+- **Merge the `/agents` menu headline into a single `Total:` line.** The former `Session total` and `All-time total` lines are replaced by one `Total:` that sums the permanent store (evicted work) and every still-listed agent (running + completed-pending-eviction) — token, cost, tool, run and duration — so the all-time figure no longer reads lower than the session total while runs are still live. Running agents contribute live runs and duration from their timing fields; never-started queued agents contribute nothing. Updated the `agentsMenuTitle` docstring and tests to match.
 
 ## [0.19.0] - 2026-08-25
 
