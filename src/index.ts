@@ -204,6 +204,7 @@ function buildNotificationDetails(record: AgentRecord, resultMaxLen: number, act
     // be stuck with the old answer.
     totalCost: getLifetimeCost(record.lifetimeUsage),
     durationMs: record.completedAt ? record.completedAt - record.startedAt : 0,
+    compactionCount: record.compactionCount,
     outputFile: record.outputFile,
     error: record.error,
     resultPreview: record.result
@@ -335,6 +336,7 @@ export default function (pi: ExtensionAPI) {
           if (costText) parts.push(costText);
         }
         if (d.durationMs > 0) parts.push(formatMs(d.durationMs));
+        if (d.compactionCount) parts.push(`${d.compactionCount} compaction${d.compactionCount === 1 ? "" : "s"}`);
         if (parts.length) {
           line += "\n  " + parts.map(p => theme.fg("dim", p)).join(" " + theme.fg("dim", "·") + " ");
         }
@@ -351,6 +353,22 @@ export default function (pi: ExtensionAPI) {
         // Line 4: output file link (if present)
         if (d.outputFile) {
           line += "\n  " + theme.fg("muted", `transcript: ${d.outputFile}`);
+        }
+
+        // n2k: single-line per-subagent stats summary appended at completion render — reuses stats already flowing via details (widget/viewer)
+        // Additive hook at single existing funnel (notification render), no new deps/settings, weighted total via getLifetimeTotal/formatTokens.
+        const summaryParts: string[] = [];
+        if (d.turnCount > 0) summaryParts.push(formatTurns(d.turnCount, d.maxTurns));
+        if (d.toolUses > 0) summaryParts.push(`${d.toolUses} tool use${d.toolUses === 1 ? "" : "s"}`);
+        if (d.totalTokens > 0) summaryParts.push(formatTokens(d.totalTokens));
+        if (showCost) {
+          const c = formatCost(d.totalCost ?? 0);
+          if (c) summaryParts.push(c);
+        }
+        if (d.durationMs > 0) summaryParts.push(formatMs(d.durationMs));
+        if (d.compactionCount) summaryParts.push(`${d.compactionCount} compaction${d.compactionCount === 1 ? "" : "s"}`);
+        if (summaryParts.length) {
+          line += "\n  " + theme.fg("dim", summaryParts.join(" · "));
         }
 
         return line;

@@ -339,6 +339,7 @@ export interface NotificationDetails {
    */
   totalCost?: number;
   durationMs: number;
+  compactionCount?: number;
   outputFile?: string;
   error?: string;
   resultPreview: string;
