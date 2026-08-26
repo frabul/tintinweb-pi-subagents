@@ -107,6 +107,10 @@ describe("background-only Agent execution", () => {
     const out = textOf(await spawn(tools));
 
     expect(out).toContain("Agent ID:");
+    // The background handoff states the run status right after the
+    // description (fork reference 614c4ef) — the orchestrator's first
+    // response must show the agent is already running.
+    expect(out).toContain("Description: d\nStatus: running");
     // The whole point of backgrounding: the orchestrator does NOT get the
     // output here — it arrives later as a notification preview.
     expect(out).not.toContain("THE-PAYLOAD");
