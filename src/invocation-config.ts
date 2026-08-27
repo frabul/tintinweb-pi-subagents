@@ -41,19 +41,6 @@ export function resolveAgentInvocationConfig(
   runInBackground: boolean;
   isolated: boolean;
   isolation?: IsolationMode;
-  /**
-   * Caller parameters an agent file's frontmatter still outranks for
-   * frontmatter-authoritative fields such as `thinking`, so the surfaces can
-   * say "(asked X)" instead of presenting the effective value as the requested
-   * one (#182). The `model` member was intentionally dropped: `params.model`
-   * is an explicit override and wins over the agent file's default, so there is
-   * no caller model that can be reported as ignored.
-   *
-   * `max_turns` and `max_context_length` are deliberately absent: no surface
-   * renders a requested-vs-effective limit for either, so recording one would
-   * be dead data.
-   */
-  overridden?: { thinking?: ThinkingLevel };
 } {
   // Normalize optional string params before applying precedence. LLMs often
   // emit blank strings for omitted fields; treating `""` as a real value would
@@ -66,39 +53,33 @@ export function resolveAgentInvocationConfig(
     ? params.inherit_context
     : undefined;
 
-  // The caller's model is the one deliberate exception to frontmatter-first
-  // resolution: `model` is documented as an override, while frontmatter is its
-  // default. Worktree isolation has no caller-facing override at all — it is
-  // configured exclusively in the agent's frontmatter, and only `"worktree"`
-  // opts in (anything else or an absent field means no worktree).
+  // Every caller parameter wins over the agent file's frontmatter: a tool
+  // call is the orchestrator's explicit instruction, so `model`, `thinking`,
+  // `max_turns`, `inherit_context` and `isolated` all override their frontmatter
+  // defaults when supplied. The one field the caller cannot set is worktree
+  // isolation — it is configured exclusively in the agent's frontmatter, and
+  // only `"worktree"` opts in (anything else or an absent field means no
+  // worktree).
   const isolation = agentConfig?.isolation === "worktree"
     && opts?.worktreeAllowed !== false
     ? "worktree"
     : undefined;
 
-  const overriddenThinking = agentConfig?.thinking != null && rawThinking != null
-    && agentConfig.thinking !== rawThinking
-    ? rawThinking as ThinkingLevel
-    : undefined;
 
   return {
     modelInput: rawModel ?? agentConfig?.model,
     modelFromParams: rawModel != null,
-    thinking: (agentConfig?.thinking ?? rawThinking) as ThinkingLevel | undefined,
-    maxTurns: agentConfig?.maxTurns ?? params.max_turns,
+    thinking: (rawThinking ?? agentConfig?.thinking) as ThinkingLevel | undefined,
+    maxTurns: params.max_turns ?? agentConfig?.maxTurns,
     // Per-call only — there is no frontmatter `max_context_length` field, so
     // the parameter is the sole source (the project default applies later).
     maxContextLength: params.max_context_length,
-    inheritContext: agentConfig?.inheritContext ?? rawInheritContext ?? false,
+    inheritContext: rawInheritContext ?? agentConfig?.inheritContext ?? false,
     // Retain the resolved field for invocation snapshots and older callers,
     // but never allow configuration or legacy options to select inline work.
     runInBackground: true,
-    isolated: agentConfig?.isolated ?? params.isolated ?? false,
+    isolated: params.isolated ?? agentConfig?.isolated ?? false,
     isolation,
-    // Undefined rather than an empty object when nothing was overridden: callers
-    // spread this into the invocation snapshot, and an always-present key would
-    // put `requestedThinking: undefined` on every record.
-    overridden: overriddenThinking !== undefined ? { thinking: overriddenThinking } : undefined,
   };
 }
 

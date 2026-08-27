@@ -202,11 +202,10 @@ describe("Agent launch metadata — effective model", () => {
     expect(result.details.tags).toContain("thinking: high (asked max)");
   });
 
-  // Asserted on the immediate background result, which renders BEFORE a session
-  // exists. That is the only place the two causes of a mismatch are separable:
-  // a clamp cannot have happened yet, so "(asked max)" here can only come from
-  // the agent file outranking the parameter.
-  it("discloses a level an agent file pinned over the caller's (#182)", async () => {
+  // An explicit tool call is the orchestrator's instruction, so a caller
+  // `thinking` parameter wins over an agent file's pin. Asserted on the
+  // immediate background result, which renders BEFORE a session exists.
+  it("lets the caller's thinking override an agent file's pin", async () => {
     pinnedAgent("thinking: low\n");
     const tool = agentTool();
     vi.mocked(runAgent).mockImplementation(() => new Promise(() => {}) as never);
@@ -219,7 +218,10 @@ describe("Agent launch metadata — effective model", () => {
       ctx(),
     );
 
-    expect(result.details.tags).toContain("thinking: low (asked max)");
+    // The caller's `max` wins; the agent file's `low` is ignored, so there is
+    // nothing to disclose.
+    expect(result.details.tags).toContain("thinking: max");
+    expect(result.details.tags).not.toContain("thinking: low (asked max)");
   });
 
   it("lets the caller's model override an agent file's default", async () => {

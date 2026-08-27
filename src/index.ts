@@ -1925,10 +1925,6 @@ Do directly:
         modelName,
         modelId,
         thinking,
-        // Only set where frontmatter still outranked the caller, so the surfaces
-        // can disclose a parameter that was accepted but could not take effect
-        // (#182). Model is deliberately absent: params.model wins.
-        requestedThinking: resolvedConfig.overridden?.thinking,
         // Explicit value only — the default fallback would just add noise.
         // Normalize so `0` (unlimited) doesn't surface as a misleading "max turns: 0".
         maxTurns: normalizeMaxTurns(resolvedConfig.maxTurns),

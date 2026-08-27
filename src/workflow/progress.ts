@@ -88,9 +88,10 @@ export interface WorkflowAgentEntry {
   thinking?: string;
   /**
    * What the call asked for, kept only when it did not get it — pi clamped the
-   * level, or an agent file's frontmatter outranked the option (#182). Rendered
-   * as `(asked max)` beside the effective value rather than silently replacing
-   * it.
+   * level to what the model supports. Rendered as `(asked max)` beside the
+   * effective value rather than silently replacing it. The caller's parameter
+   * always wins over frontmatter, so a frontmatter pin can no longer displace
+   * the request.
    */
   requestedThinking?: string;
   requestedModel?: string;
