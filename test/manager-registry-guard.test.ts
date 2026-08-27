@@ -11,7 +11,7 @@
  * The fix: the first activation claims the slot, later activations leave it
  * alone, and only the owner's shutdown releases it.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -20,6 +20,15 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
+
+let hermetic: Hermetic;
+
+beforeEach(() => {
+  // Isolate the workspace so spawns resolve against a default config
+  // (default agents enabled, no strict fallback) instead of this repo's.
+  hermetic = hermeticDir({ settings: { schedulingEnabled: false } });
+});
 
 const MANAGER_KEY = Symbol.for("pi-subagents:manager");
 
@@ -73,6 +82,7 @@ async function spawnBackground(tools: Map<string, any>): Promise<string> {
 // Restore the global slot around every test.
 const priorGlobal = (globalThis as any)[MANAGER_KEY];
 afterEach(() => {
+  hermetic.restore();
   if (priorGlobal === undefined) delete (globalThis as any)[MANAGER_KEY];
   else (globalThis as any)[MANAGER_KEY] = priorGlobal;
   vi.mocked(runAgent).mockReset();

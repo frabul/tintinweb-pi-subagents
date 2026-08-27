@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -10,6 +10,13 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
+
+let hermetic: Hermetic;
+
+beforeEach(() => {
+  hermetic = hermeticDir({ settings: { schedulingEnabled: false } });
+});
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -69,6 +76,7 @@ function makeHeadlessCtx() {
 
 describe("print mode background notifications", () => {
   afterEach(() => {
+    hermetic.restore();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });

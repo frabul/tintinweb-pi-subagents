@@ -4,7 +4,7 @@
  * a string. Drives the registered `Agent` / `get_subagent_result` tools and
  * inspects the text delivered back, for a turn-limit abort and a user stop.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -13,6 +13,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -62,8 +63,17 @@ function ctx() {
 
 const textOf = (r: any): string => r.content[0].text;
 
+let hermetic: Hermetic;
+
+beforeEach(() => {
+  // Isolate the workspace so spawns resolve against a default config
+  // (default agents enabled, no strict fallback) instead of this repo's.
+  hermetic = hermeticDir({ settings: { schedulingEnabled: false } });
+});
+
 describe("status note reaches the parent through the real handlers", () => {
   afterEach(() => {
+    hermetic.restore();
     delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
     vi.restoreAllMocks();
   });
