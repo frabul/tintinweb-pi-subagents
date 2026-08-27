@@ -110,17 +110,17 @@ The extension renders a persistent widget above the editor showing active agents
 
 ```
 ● Agents
-├─ ⠹ Agent  Refactor auth module · ↻5≤30 · 󱁤 5 · 🚀33.8k . 📜120k · 12.3s
+├─ ⠹ Agent  Refactor auth module · ↻5≤30 · 󱁤 5 · 🚀33.8k . 📜120k<200k · 12.3s
 │    ⎿  editing 2 files…
 ├─ ⠹ Explore  Find auth files · ↻3 · 󱁤 3 · 🚀12.4k · 4.1s
 │    ⎿  searching…
-├─ ⠹ Agent  Long-running task · ↻42 · 󱁤 38 · 🚀91.0k . 📜180k . 🗜2 · 2m17s
+├─ ⠹ Agent  Long-running task · ↻42 · 󱁤 38 · 🚀91.0k . 📜180k<200k . 🗜2 · 2m17s
 │    ⎿  reading…
 └─ 2 queued
 ```
 
 The token field carries two optional signals after the total, joined with ` . `:
-- **`📜NNk`** — current context length in tokens (the session's live context-window usage). Omitted when unknown.
+- **`📜NNk`** — current context length in tokens (the session's live context-window usage). When a context cap is in effect (the configured `max_context_length`, explicit or the project default), it is appended as `📜NNk<limit>` (e.g. `📜120k<200k`) — the cap that bounds the run, not the model's native window. Omitted when no cap is known.
 - **`🗜N`** — number of times the session has compacted, when > 0. Stays dim.
 
 ### FleetView
@@ -656,7 +656,7 @@ Independent of `reportUsage`: this one is what you read, that one is what your s
 **Show model** (`showModel`, default `false`): whether the widget's running rows name the model driving each agent and the thinking level it is running at:
 
 ```text
-├─ ⠹ Explore  inspect code · sonnet 4.6 · thinking: high · ↻3 · 8.2k token · 4.1s
+├─ ⠹ Explore  inspect code · sonnet 4.6 - high · ↻3 · 8.2k token · 4.1s
 ```
 
 Off by default because the row already carries the description, turns, tool uses, tokens and elapsed time, and every character it gains is one the description loses on a narrow terminal. The other surfaces show the pair either way: the `Agent` tool result names the model beside its tags, and the conversation viewer's `↳` row spells out the canonical `provider/model-id`.

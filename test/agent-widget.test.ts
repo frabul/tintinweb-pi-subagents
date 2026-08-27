@@ -37,6 +37,15 @@ describe("formatSessionTokens", () => {
       "\u001b[35m🚀1.2k . \u001b[2m📜70k\u001b[39m\u001b[35m\u001b[39m",
     );
   });
+
+  it("appends the context-window limit as 📜<limit> when provided", () => {
+    expect(formatSessionTokens(1234, 49_300, theme, 0, 100_000)).toBe("🚀1.2k . <dim>📜49.3k<100k</dim>");
+    expect(formatSessionTokens(1234, 1_200_000, theme, 0, 2_000_000)).toBe("🚀1.2k . <dim>📜1.2M<2M</dim>");
+    // null/0 limit falls back to the usage-only form
+    expect(formatSessionTokens(1234, 49_300, theme, 0, null)).toBe("🚀1.2k . <dim>📜49.3k</dim>");
+    expect(formatSessionTokens(1234, 49_300, theme, 0, 0)).toBe("🚀1.2k . <dim>📜49.3k</dim>");
+  });
+
 });
 
 describe("AgentWidget", () => {
@@ -145,8 +154,12 @@ describe("AgentWidget", () => {
   it("names the model and thinking on a running row under showModel", () => {
     const manager = { listAgents: () => [makeRecord("bg", { isBackground: true })] };
 
-    expect(renderLines(manager, "bg", () => "background", true))
-      .toContain("sonnet 4.6 · thinking: high");
+    const lines = renderLines(manager, "bg", () => "background", true);
+    expect(lines).toContain("sonnet 4.6 - high");
+    // Merged into one field — the model and thinking are no longer separate,
+    // separator-joined parts.
+    expect(lines).not.toContain("thinking:");
+    expect(lines).not.toContain("sonnet 4.6 ·");
   });
 
   it("renders the row exactly as before when showModel is off", () => {
@@ -171,7 +184,55 @@ describe("AgentWidget", () => {
     const manager = { listAgents: () => [record] };
 
     expect(renderLines(manager, "bg", () => "background", true))
-      .toContain("haiku 4.5 · thinking: high (asked max)");
+      .toContain("haiku 4.5 - high (asked max)");
+  });
+
+  it("renders context usage against its window limit on a running row", () => {
+    const record = makeRecord("bg", { isBackground: true });
+    record.lifetimeUsage = { input: 100, output: 50, cacheRead: 0, cacheWrite: 0 };
+    const activity = {
+      ...makeActivity(),
+      session: { getSessionStats: () => ({ tokens: {}, contextUsage: { tokens: 49_300, contextWindow: 100_000 } }) },
+    };
+    const manager = { listAgents: () => [record] };
+    const widget = new AgentWidget(
+      manager as any,
+      new Map([["bg", activity]]),
+      () => "background",
+      () => false,
+      () => true,
+    );
+    let factory: any;
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_key, content) => { factory = content; } });
+    widget.update();
+    const lines = factory({ terminal: { columns: 120 }, requestRender: () => {} }, theme).render().join("\n");
+    expect(lines).toContain("📜49.3k<100k");
+  });
+
+  it("prefers the configured max-context-length over the native window as the limit", () => {
+    const record = makeRecord("bg", { isBackground: true });
+    record.lifetimeUsage = { input: 100, output: 50, cacheRead: 0, cacheWrite: 0 };
+    // Native window reports 256k, but the run was configured with a 100k cap.
+    record.invocation = { ...record.invocation, maxContextLength: 100_000 };
+    const activity = {
+      ...makeActivity(),
+      session: { getSessionStats: () => ({ tokens: {}, contextUsage: { tokens: 49_300, contextWindow: 256_000 } }) },
+    };
+    const manager = { listAgents: () => [record] };
+    const widget = new AgentWidget(
+      manager as any,
+      new Map([["bg", activity]]),
+      () => "background",
+      () => false,
+      () => true,
+    );
+    let factory: any;
+    widget.setUICtx({ setStatus: () => {}, setWidget: (_key, content) => { factory = content; } });
+    widget.update();
+    const lines = factory({ terminal: { columns: 120 }, requestRender: () => {} }, theme).render().join("\n");
+    // The configured cap bounds the run, so the limit is 100k, not the native 256k.
+    expect(lines).toContain("📜49.3k<100k");
+    expect(lines).not.toContain("256k");
   });
 
   // Queued agents stay a one-line count. A fan-out of ten would otherwise eat

@@ -10,7 +10,7 @@ import { renderAgentName } from "../agent-color.js";
 import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
 import { getConfig } from "../agent-types.js";
 import type { AgentInvocation, SubagentType, WidgetMode } from "../types.js";
-import { getLifetimeCost, getLifetimeTotal, getSessionContextLength, type LifetimeUsage, type SessionLike } from "../usage.js";
+import { getLifetimeCost, getLifetimeTotal, getSessionContextLength, getSessionContextWindow, type LifetimeUsage, type SessionLike } from "../usage.js";
 
 // ---- Constants ----
 
@@ -148,22 +148,26 @@ export function formatCount(count: number): string {
 }
 
 /**
- * Token count with optional context length and compaction-count annotations.
- *   "🚀12.3k"                      — no annotations
- *   "🚀12.3k . 📜120k"           — context only
- *   "🚀12.3k . 🗜2"              — compactions only
- *   "🚀12.3k . 📜120k . 🗜2"     — both
+ * Token count with optional context length, context-window limit, and
+ * compaction-count annotations.
+ *   "🚀12.3k"                          — no annotations
+ *   "🚀12.3k . 📜120k"               — context only
+ *   "🚀12.3k . 📜49.3k<100k"         — context with limit
+ *   "🚀12.3k . 🗜2"                  — compactions only
+ *   "🚀12.3k . 📜120k . 🗜2"         — both
  */
 export function formatSessionTokens(
   tokens: number,
   contextTokens: number | null,
   theme: Theme,
   compactions = 0,
+  contextWindow: number | null = null,
 ): string {
   const tokenStr = `🚀${formatCount(tokens)}`;
   const annot: string[] = [];
   if (contextTokens !== null) {
-    annot.push(theme.fg("dim", `📜${formatCount(contextTokens)}`));
+    const ctx = contextWindow != null && contextWindow > 0 ? `${formatCount(contextTokens)}<${formatCount(contextWindow)}` : `${formatCount(contextTokens)}`;
+    annot.push(theme.fg("dim", `📜${ctx}`));
   }
   if (compactions > 0) {
     annot.push(theme.fg("dim", `🗜${compactions}`));
@@ -459,18 +463,28 @@ export class AgentWidget {
       // runs and the record once it stops made the figure jump at completion.
       const tokens = getLifetimeTotal(a.lifetimeUsage);
       const contextTokens = getSessionContextLength(bg?.session);
-      const tokenText = tokens > 0 ? formatSessionTokens(tokens, contextTokens || null, theme, a.compactionCount) : "";
-      const costText = this.showCost() ? formatCost(getLifetimeCost(a.lifetimeUsage)) : "";
+      // The cap that actually bounds the run is the configured max-context-length
+      // (explicit value or the project default) — not the model's native window.
+      // Mirrors the turns display (↻N≤max), which shows the configured max_turns
+      // cap. Falls back to the native window when the record carries no cap.
+      const contextLimit = a.invocation?.maxContextLength ?? getSessionContextWindow(bg?.session);
+      const tokenText = tokens > 0 ? formatSessionTokens(tokens, contextTokens || null, theme, a.compactionCount, contextLimit) : "";
 
       const parts: string[] = [];
+      const costText = this.showCost() ? formatCost(getLifetimeCost(a.lifetimeUsage)) : "";
+
       if (this.showModel()) {
-        // Leading, and paired: a thinking level means nothing without the model
-        // it applies to. The tag is taken from buildInvocationTags rather than
-        // rebuilt so the "(asked X)" annotation survives.
+        // Leading, and merged into one field so the model and the thinking
+        // level it runs at read as a single pair: "gpt-5.6 sol - high" rather
+        // than "gpt-5.6 sol · thinking: high". The tag is taken from
+        // buildInvocationTags rather than rebuilt so the "(asked X)" annotation
+        // survives (e.g. "gpt-5.6 sol - high (asked medium)").
         const { modelName, tags } = buildInvocationTags(a.invocation);
-        if (modelName) parts.push(modelName);
         const thinkingTag = tags.find(tag => tag.startsWith("thinking: "));
-        if (thinkingTag) parts.push(thinkingTag);
+        const thinkingLevel = thinkingTag?.replace(/^thinking: /, "");
+        if (modelName && thinkingLevel) parts.push(`${modelName} - ${thinkingLevel}`);
+        else if (modelName) parts.push(modelName);
+        else if (thinkingLevel) parts.push(thinkingLevel);
       }
       if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
       if (toolUses > 0) parts.push(`󱁤 ${toolUses}`);

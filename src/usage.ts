@@ -180,3 +180,17 @@ export function getSessionContextLength(session: SessionLike | undefined): numbe
     return typeof tokens === "number" && tokens > 0 ? tokens : 0;
   } catch { return 0; }
 }
+
+/**
+ * Context-window limit in tokens (the model's configured cap), or null when
+ * unavailable (no model contextWindow, or post-compaction before the next
+ * response). Distinct from {@link getSessionContextLength}, which is the
+ * CURRENT usage against that cap — together they render `📜49.3k<100k`.
+ */
+export function getSessionContextWindow(session: SessionLike | undefined): number | null {
+  if (!session) return null;
+  try {
+    const win = session.getSessionStats().contextUsage?.contextWindow;
+    return typeof win === "number" && win > 0 ? win : null;
+  } catch { return null; }
+}

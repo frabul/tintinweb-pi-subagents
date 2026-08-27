@@ -10,7 +10,7 @@ import { type Component, Input, Markdown, type MarkdownOptions, type MarkdownThe
 import { renderAgentName } from "../agent-color.js";
 import { extractText } from "../context.js";
 import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
-import { getLifetimeCost, getLifetimeTotal, getSessionContextLength } from "../usage.js";
+import { getLifetimeCost, getLifetimeTotal, getSessionContextLength, getSessionContextWindow } from "../usage.js";
 import type { Theme } from "./agent-widget.js";
 import { type AgentActivity, buildInvocationTags, describeActivity, fgPreservingNestedStyles, formatCost, formatDuration, formatSessionTokens, getPromptModeLabel } from "./agent-widget.js";
 import { createViewerKeys, type ViewerKeybindings, type ViewerKeys } from "./viewer-keys.js";
@@ -302,7 +302,12 @@ export class ConversationViewer implements Component {
     const tokens = getLifetimeTotal(this.record.lifetimeUsage);
     if (tokens > 0) {
       const contextTokens = getSessionContextLength(this.activity?.session);
-      headerParts.push(formatSessionTokens(tokens, contextTokens || null, th, this.record.compactionCount));
+      const contextWindow = getSessionContextWindow(this.activity?.session);
+      // The cap that bounds the run is the configured max-context-length
+      // (explicit value or the project default), not the model's native window.
+      // Falls back to the native window when the record carries no cap.
+      const contextLimit = this.record.invocation?.maxContextLength ?? contextWindow;
+      headerParts.push(formatSessionTokens(tokens, contextTokens || null, th, this.record.compactionCount, contextLimit));
     }
     const cost = this.showCost ? formatCost(getLifetimeCost(this.record.lifetimeUsage)) : "";
     if (cost) headerParts.push(cost);
