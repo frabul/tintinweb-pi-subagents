@@ -10,7 +10,7 @@
  * queues, call the real tool with wait:true, drain the queue, and assert the
  * call returns the final result.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -19,6 +19,17 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
+import { type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
+
+let hermetic: Hermetic;
+
+beforeEach(() => {
+  hermetic = hermeticDir({ settings: { schedulingEnabled: false } });
+});
+
+afterEach(() => {
+  hermetic.restore();
+});
 
 function makePi() {
   const tools = new Map<string, any>();

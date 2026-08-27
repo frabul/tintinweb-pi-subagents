@@ -11,10 +11,9 @@
  *   - a fan-out sized like the description's parallel examples runs
  *     concurrently instead of queueing behind the default limit.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type Hermetic, hermeticDir } from "./helpers/boot-extension.js";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -24,25 +23,17 @@ vi.mock("../src/agent-runner.js", async () => {
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
 
-let originalAgentDir: string | undefined;
-let originalHome: string | undefined;
-let isolatedDir: string;
+let hermetic: Hermetic;
 
 beforeEach(() => {
-  originalAgentDir = process.env.PI_CODING_AGENT_DIR;
-  originalHome = process.env.HOME;
-  isolatedDir = mkdtempSync(join(tmpdir(), "background-by-default-"));
-  process.env.PI_CODING_AGENT_DIR = join(isolatedDir, "agent-dir");
-  process.env.HOME = isolatedDir;
+  // Isolate the workspace so the spawn reads a default config (default agents
+  // enabled, no strict fallback) instead of this repo's .pi/subagents.json.
+  hermetic = hermeticDir({ settings: { schedulingEnabled: false } });
 });
 
 afterEach(() => {
   delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
-  if (originalAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
-  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-  if (originalHome == null) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  rmSync(isolatedDir, { recursive: true, force: true });
+  hermetic.restore();
   vi.restoreAllMocks();
 });
 

@@ -13,7 +13,7 @@
  * tested: they are single-line guards whose failure is immediately visible in
  * the tool's own reply.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/agent-runner.js", async () => {
   const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
@@ -22,14 +22,23 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent, steerAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
-import { ctx, flush, makePi, textOf } from "./helpers/boot-extension.js";
+import { ctx, flush, type Hermetic, hermeticDir, makePi, textOf } from "./helpers/boot-extension.js";
+
+let hermetic: Hermetic;
 
 // steerAgent and runAgent are module-level mocks shared by every case here, so
 // call history has to be reset or a "was never called" assertion depends on the
 // order the cases happen to run in.
 beforeEach(() => {
+  // Isolate the workspace so spawns resolve against a default config
+  // (default agents enabled, no strict fallback) instead of this repo's.
+  hermetic = hermeticDir({ settings: { schedulingEnabled: false } });
   vi.mocked(steerAgent).mockReset();
   vi.mocked(runAgent).mockReset();
+});
+
+afterEach(() => {
+  hermetic.restore();
 });
 
 /** Enough of an AgentSession for the manager's and index's onSessionCreated hooks. */
