@@ -470,8 +470,11 @@ export class AgentWidget {
       const contextLimit = a.invocation?.maxContextLength ?? getSessionContextWindow(bg?.session);
       const tokenText = tokens > 0 ? formatSessionTokens(tokens, contextTokens || null, theme, a.compactionCount, contextLimit) : "";
 
-      const parts: string[] = [];
-      const costText = this.showCost() ? formatCost(getLifetimeCost(a.lifetimeUsage)) : "";
+      // Split the header so the model + thinking level close line 1 and the live
+      // stats (turns, tool uses, tokens, cost, elapsed) wrap to line 2. The
+      // activity line showing the last assistant message is dropped.
+      const headStats: string[] = [];
+      const tailStats: string[] = [];
 
       if (this.showModel()) {
         // Leading, and merged into one field so the model and the thinking
@@ -482,22 +485,24 @@ export class AgentWidget {
         const { modelName, tags } = buildInvocationTags(a.invocation);
         const thinkingTag = tags.find(tag => tag.startsWith("thinking: "));
         const thinkingLevel = thinkingTag?.replace(/^thinking: /, "");
-        if (modelName && thinkingLevel) parts.push(`${modelName} - ${thinkingLevel}`);
-        else if (modelName) parts.push(modelName);
-        else if (thinkingLevel) parts.push(thinkingLevel);
+        if (modelName && thinkingLevel) headStats.push(`${modelName} - ${thinkingLevel}`);
+        else if (modelName) headStats.push(modelName);
+        else if (thinkingLevel) headStats.push(thinkingLevel);
       }
-      if (bg) parts.push(formatTurns(bg.turnCount, bg.maxTurns));
-      if (toolUses > 0) parts.push(`󱁤 ${toolUses}`);
-      if (tokenText) parts.push(tokenText);
-      if (costText) parts.push(costText);
-      parts.push(elapsed);
-      const statsText = parts.join(" · ");
+      if (bg) tailStats.push(formatTurns(bg.turnCount, bg.maxTurns));
+      if (toolUses > 0) tailStats.push(`󱁤 ${toolUses}`);
+      if (tokenText) tailStats.push(tokenText);
+      const costText = this.showCost() ? formatCost(getLifetimeCost(a.lifetimeUsage)) : "";
+      if (costText) tailStats.push(costText);
+      tailStats.push(elapsed);
 
-      const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
+      const headText = headStats.length > 0
+        ? `${theme.fg("dim", " · ")}${fgPreservingNestedStyles(theme, "dim", headStats.join(" · "))}`
+        : "";
 
       runningLines.push([
-        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentName(a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
-        truncate(theme.fg("dim", "│  ") + theme.fg("dim", `  ⎿  ${activity}`)),
+        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentName(a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)}${headText}`),
+        truncate(theme.fg("dim", "│  ") + fgPreservingNestedStyles(theme, "dim", tailStats.join(" · "))),
       ]);
     }
 
@@ -517,14 +522,14 @@ export class AgentWidget {
       for (const pair of runningLines) lines.push(...pair);
       if (queuedLine) lines.push(queuedLine);
 
-      // Fix last connector: swap ├─ → └─ and │ → space for activity lines.
+      // Fix last connector: swap ├─ → └─ and │ → space for the stats line.
       if (lines.length > 1) {
         const last = lines.length - 1;
         lines[last] = lines[last].replace("├─", "└─");
         // If last item is a running agent activity line, fix indent of that line
         // and fix the header line above it.
         if (runningLines.length > 0 && !queuedLine) {
-          // The last two lines are the last running agent's header + activity.
+          // The last two lines are the last running agent's header + stats.
           if (last >= 2) {
             lines[last - 1] = lines[last - 1].replace("├─", "└─");
             lines[last] = lines[last].replace("│  ", "   ");
