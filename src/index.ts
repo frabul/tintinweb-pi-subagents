@@ -1498,10 +1498,10 @@ export default function (pi: ExtensionAPI) {
   const compactAgentToolDescription = `Launch an autonomous sub-agent for complex, multi-step tasks.
 Before using this tool you MUST call \`agent_info('list')\` to get available agents.
 Notes:
-- description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
+- description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has no access tu this conversation (unless inherit_context attribute is true).
 - Optional parameters override the selected agent type's defaults. Omit or blank them when no override is intended.
 - Agents always run in the background: send multiple Agent calls in one message for parallel work; you are notified as each completes — **NEVER POLL OR SLEEP**.
-- The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done. get_subagent_result retrieves the full result.
+- The result is not shown to the user — summarize it for them. get_subagent_result retrieves the full result.
 - Address agents by @name / their handle: steer_subagent messages a running one; resume continues a previous agent by ID.
 - Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.md (global).`;
 
@@ -1610,12 +1610,10 @@ Do directly:
     name: SUBAGENT_TOOL_NAMES.AGENT,
     label: "Agent",
     description: agentToolDescription,
-    promptSnippet: "Launch autonomous sub-agents for complex multi-step tasks",
     promptGuidelines: [
-      "Use Agent with specialized agents when the task matches an agent type's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing — if you delegate research to a subagent, do not also perform the same searches yourself.",
-      "For broad codebase exploration or research, spawn Agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.",
+      "Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results.",
       "Agents always run in the background and you will be notified on completion — do not poll or sleep waiting for them. Continue with other work instead.",
-      "Trust but verify: an agent's summary describes intent, not outcome. When an agent writes or edits code, check the actual changes before reporting work as done.",
+      "Importantly, avoid duplicating work that subagents are already doing — if you delegate research to a subagent, do not also perform the same searches yourself.",
     ],
     parameters: Type.Object({
       prompt: Type.String({
@@ -2298,11 +2296,11 @@ Do directly:
     label: "SubagentWorkflow",
     description: renderToolDescriptionTemplate(fullWorkflowToolDescription),
     promptSnippet: "Run a deterministic script that orchestrates many subagents",
-    promptGuidelines: [
-      "Use SubagentWorkflow when the number of agents depends on something discovered at runtime, when work flows through stages, or when findings should be independently verified. Use Agent for one delegated task or a handful you can name up front.",
-      "Prefer `pipeline` over `parallel` — a barrier costs wall-clock whenever the stages are unevenly sized.",
-      "A workflow runs in the background and notifies you when it finishes — do not poll or sleep waiting for it.",
-    ],
+    // promptGuidelines: [
+    //   "Use SubagentWorkflow when the number of agents depends on something discovered at runtime, when work flows through stages, or when findings should be independently verified. Use Agent for one delegated task or a handful you can name up front.",
+    //   "Prefer `pipeline` over `parallel` — a barrier costs wall-clock whenever the stages are unevenly sized.",
+    //   "A workflow runs in the background and notifies you when it finishes — do not poll or sleep waiting for it.",
+    // ],
     parameters: Type.Object({
       script: Type.Optional(
         Type.String({
