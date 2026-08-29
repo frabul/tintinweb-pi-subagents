@@ -66,6 +66,10 @@ function tombstone(over: Partial<AgentTombstone> = {}): AgentTombstone {
     description: "audit the RPC path",
     sessionFile: "/sessions/explore.jsonl",
     completedAt: 5000,
+    startedAt: 1000,
+    status: "completed",
+    lifetimeUsage: { input: 100, output: 50, cacheWrite: 0, cost: 0.002 },
+    toolUses: 3,
     ...over,
   };
 }

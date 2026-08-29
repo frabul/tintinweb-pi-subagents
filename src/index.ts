@@ -38,7 +38,7 @@ import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { getStatusNote, partialOutputSuffix } from "./status-note.js";
-import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
+import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type AgentTombstone, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
 import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
 import {
   type AgentActivity,
@@ -2945,6 +2945,17 @@ Do directly:
       const done = agents.filter(a => a.status === "completed" || a.status === "steered").length;
       options.push(`Running agents (${agents.length}) — ${running} running, ${done} done`);
     }
+    // History — running, terminated and tombstoned
+    {
+      const tombstones = manager.listTombstones();
+      const historyCount = agents.length + tombstones.length;
+      if (historyCount > 0) {
+        const running = agents.filter(a => a.status === "running" || a.status === "queued").length;
+        options.push(`History (${historyCount}) — ${running} running, ${historyCount - running} done/evicted`);
+      } else {
+        options.push(`History (0)`);
+      }
+    }
 
     // Agent types list
     if (allNames.length > 0) {
@@ -2982,6 +2993,9 @@ Do directly:
 
     if (choice.startsWith("Running agents (")) {
       await showRunningAgents(ctx);
+      await showAgentsMenu(ctx);
+    } else if (choice.startsWith("History (")) {
+      await showHistory(ctx);
       await showAgentsMenu(ctx);
     } else if (choice.startsWith("Agent types (")) {
       await showAllAgentsList(ctx);
@@ -3089,6 +3103,61 @@ Do directly:
     // Back-navigation: re-show the list
     await showRunningAgents(ctx);
   }
+
+  async function showHistory(ctx: ExtensionCommandContext) {
+    const live = manager.listAgents().filter(isTopLevelAgent);
+    const tombstones = manager.listTombstones();
+    type HistoryEntry =
+      | { kind: "live"; record: AgentRecord; sortKey: number }
+      | { kind: "tombstone"; entry: AgentTombstone; sortKey: number };
+    const entries: HistoryEntry[] = [
+      ...live.map(r => ({ kind: "live" as const, record: r, sortKey: r.startedAt })),
+      ...tombstones.map(e => ({ kind: "tombstone" as const, entry: e, sortKey: e.startedAt })),
+    ].sort((a, b) => b.sortKey - a.sortKey);
+
+    if (entries.length === 0) {
+      ctx.ui.notify("No agents in history.", "info");
+      return;
+    }
+
+    const formatEntry = (e: HistoryEntry): string => {
+      if (e.kind === "live") {
+        const r = e.record;
+        const dn = getDisplayName(r.type);
+        const tokens = getLifetimeTotal(r.lifetimeUsage);
+        const tokenStr = tokens > 0 ? formatTokens(tokens) : "0 token";
+        const cost = getLifetimeCost(r.lifetimeUsage);
+        const costStr = formatCost(cost) || "—";
+        const dur = formatDuration(r.startedAt, r.completedAt);
+        return `${dn} · ${r.description} · ${r.status} · ${tokenStr} · ${costStr} · ${dur}`;
+      }
+      const t = e.entry;
+      const dn = getDisplayName(t.type);
+      const tokens = getLifetimeTotal(t.lifetimeUsage);
+      const tokenStr = tokens > 0 ? formatTokens(tokens) : "0 token";
+      const costStr = formatCost(getLifetimeCost(t.lifetimeUsage)) || "—";
+      const dur = formatDuration(t.startedAt, t.completedAt);
+      return `${dn} · ${t.description} · ${t.status} · ${tokenStr} · ${costStr} · ${dur} (evicted)`;
+    };
+
+    const chosen = await selectItem(ctx.ui, "History", entries, formatEntry);
+    if (!chosen) return;
+
+    if (chosen.kind === "live") {
+      await viewAgentConversation(ctx, chosen.record);
+    } else {
+      const t = chosen.entry;
+      const tokens = getLifetimeTotal(t.lifetimeUsage);
+      const costStr = formatCost(getLifetimeCost(t.lifetimeUsage)) || "—";
+      const dur = formatDuration(t.startedAt, t.completedAt);
+      ctx.ui.notify(
+        `${getDisplayName(t.type)} (${t.type}) · ${t.description} · ${t.status} · ${formatTokens(tokens)} · ${costStr} · ${dur} — evicted, handle @${t.handle}${t.alias ? ` / @${t.alias}` : ""} — session: ${t.sessionFile}`,
+        "info",
+      );
+    }
+    await showHistory(ctx);
+  }
+
 
   async function viewAgentConversation(ctx: ExtensionCommandContext, record: AgentRecord) {
     if (!record.session) {

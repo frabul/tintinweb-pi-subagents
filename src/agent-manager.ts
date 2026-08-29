@@ -1375,6 +1375,10 @@ export class AgentManager {
       description: record.description,
       sessionFile: record.sessionFile,
       completedAt: record.completedAt ?? Date.now(),
+      startedAt: record.startedAt,
+      status: record.status,
+      lifetimeUsage: { ...record.lifetimeUsage },
+      toolUses: record.toolUses,
     });
     // Bound the memory a long session can accumulate. Oldest first, since the
     // agent someone still wants to reach is the one they used most recently.

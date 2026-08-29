@@ -138,6 +138,10 @@ export interface AgentTombstone {
   /** Always set — a record with no session file is never tombstoned. */
   sessionFile: string;
   completedAt: number;
+  startedAt: number;
+  status: AgentRecord["status"];
+  lifetimeUsage: LifetimeUsage;
+  toolUses: number;
 }
 
 /**
