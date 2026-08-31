@@ -1495,66 +1495,17 @@ export default function (pi: ExtensionAPI) {
   // notes, for small/local models. Details (types, tools, frontmatter) are
   // pulled on demand via `agent_info`; per-parameter details live in the
   // parameter descriptions.
-  const compactAgentToolDescription = `Launch an autonomous sub-agent for complex, multi-step tasks.
+  const compactAgentToolDescription = `# Agents
+Launch an autonomous sub-agent for complex, multi-step tasks.
 Before using this tool you MUST call \`agent_info('list')\` to get available agents.
 Notes:
-- description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has no access tu this conversation (unless inherit_context attribute is true).
 - Optional parameters override the selected agent type's defaults. Omit or blank them when no override is intended.
-- Agents always run in the background: send multiple Agent calls in one message for parallel work; you are notified as each completes — **NEVER POLL OR SLEEP**.
-- The result is not shown to the user — summarize it for them. get_subagent_result retrieves the full result.
-- Address agents by @name / their handle: steer_subagent messages a running one; resume continues a previous agent by ID.
+- Agents always run in the background: send multiple Agent calls in one message for parallel work
+- You are notified as each agent completes, so **do not poll or sleep waiting for them**, continue with other work if any or just pause and wait for notification or user input.
+- **NEVER POLL OR SLEEP**.
+- The result is not shown to the user — summarize it for them if needed. get_subagent_result retrieves the full result
+- Address agents by @name / their handle: 'steer_subagent' messages a running one; 'resume' continues a previous agent by ID.
 - Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.md (global).`;
-
-  // Full Agent tool description — the guidelines-style text. The orchestrator
-  // pulls details (agent types, capabilities, custom-agent authoring) on
-  // demand via the `agent_info` tool, so this stays lean and only restates
-  // usage guidance.
-  const fullAgentToolDescription = `# Agents
-
-You can launch new agents to help you to complete your task without cluttering your context window.
-If you haven't already done so or if explicitly requested, inspect the available agents and their capabilities
-using tool \`agent_info('list')\`, and check which one of them most fits the task you want to delegate.
-When using the Agent tool, specify a subagent_type parameter to select which agent type to use.
-If the user asks to create a custom agent, obtain instructions using \`agent_info('create')\`.
-
-## Guidelines
-
-- Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
-- Optional parameters override the selected agent type's defaults. Omit or blank them when no override is intended.
-- All agents run in the background. When you launch multiple agents for independent work, send them in a single message with multiple tool uses, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls.
-- When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
-- When an agent runs in the background, you will be notified on completion — **DO NOT POLL OR SLEEP WAITING FOR IT**. Continue with other work or wait for user prompt.
-- For broad codebase exploration or research, spawn an agent with an appropriate subagent_type (e.g. Explore). Otherwise use direct tools (read, grep, find) when the target is already known.
-- Get an agent's full result with get_subagent_result (its ID or handle) — it reports the agent's status and full result; the completion notification carries only a preview. Do not use it to poll — you will be notified when the agent completes.
-- Address a running agent by its handle — the \`name\` you gave the Agent call, or its type: \`@name\` at the chat prompt routes to it, and steer_subagent takes the handle directly.
-- Use resume to continue the conversation with an agent that completed its task. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs — the prompt must be self-contained.
-- Use inherit_context if the agent needs the parent conversation history.${scheduleGuideline}
-- Split complex tasks into simpler subtasks to assign to multiple agents. Example: if a task involves implementation then testing, assign one agent to implementation and another to testing.
-- Verify the work done by subagents. Verification can eventually be delegated to another agent.
-
-## Writing the prompt
-
-- Give enough context about the surrounding problem so that the agent can make judgment calls rather than just guessing.
-- Describe what you've already learned or ruled out, so that the agent doesn't need to repeat the same work.
-- Provide clear, detailed prompts so the agent can work autonomously.
-- When you assign an implementation task, mention the known implementation details (strategy, modules to change, etc.) to avoid unnecessary research by the subagent.
-- Add constraints. Example: "Only change this file, don't add new dependencies, etc."
-- If all information is already in one or more files, provide the reference to the files instead.
-
-## What to delegate vs do directly
-
-If the target is already known, use a direct tool — \`read\` for a known path, \`grep\`/\`find\` for a specific symbol or string. Reserve this tool for open-ended questions that span the codebase, or tasks that require multi-step reasoning and could clutter the context window with intermediate steps and findings which are not relevant for the big picture.
-
-Delegate to subagents:
-- Independent implementation tasks (e.g. refactor package A)
-- Test writing after implementation
-- Validation of the execution of some task
-- Codebase exploration / research
-
-Do directly:
-- Quick edits (one-liners, config changes)
-- Reading files you already have anchors for
-- grep/find for specific known targets (e.g. "Where is function X defined?")`;
 
   // `toolDescriptionMode: "custom"` — user-authored description with live
   // dynamic parts. Project file wins over global; missing/empty falls back to
@@ -1600,7 +1551,7 @@ Do directly:
       if (custom) return custom;
       console.warn('[pi-subagents] toolDescriptionMode is "custom" but no agent-tool-description.md found — using "full"');
     }
-    return fullAgentToolDescription;
+    return compactAgentToolDescription;;
   })();
 
   // Held rather than registered inline: the mention clone reuses this exact
@@ -1612,8 +1563,13 @@ Do directly:
     description: agentToolDescription,
     promptGuidelines: [
       "Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results.",
-      "Agents always run in the background and you will be notified on completion — do not poll or sleep waiting for them. Continue with other work instead.",
-      "Importantly, avoid duplicating work that subagents are already doing — if you delegate research to a subagent, do not also perform the same searches yourself.",
+      "Use a subagent only for a narrow, independent questions or jobs.",
+      "IMPORTANT: do not duplicate the work that you already assigned to a sub-agent.",
+      "Wait for completion before relying on its findings.",
+      "Skip subagents when the main context already has enough evidence.",
+      "Get an agent's full result with get_subagent_result (its ID or handle) — it reports the agent's status and full result; the completion notification carries only a preview. Do not use it to poll — you will be notified when the agent completes",
+      "Use `resume` to continue the conversation with an agent that has terminated. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs — the prompt must be self-contained",
+      "Use `steer_subagent` to message a running agent. It can be used to provide additional instructions or steer it in mid-run.",
     ],
     parameters: Type.Object({
       prompt: Type.String({
@@ -1625,7 +1581,7 @@ Do directly:
       name: Type.Optional(
         Type.String({
           description:
-            'Optional memorable name for this agent, e.g. "auth-audit", so it can be addressed as `@name` at the prompt and by steer_subagent / get_subagent_result. Letters, digits, `_` and `-`. Worth setting when several agents of the same type run at once; omit for one-off work. The agent stays reachable by its type either way.',
+            'Optional memorable name for this agent, e.g. "auth-audit", so it can be addressed as `@name` at the prompt and by steer_subagent / get_subagent_result. Letters, digits, `_` and `-`.',
         }),
       ),
       subagent_type: Type.String({
@@ -1634,23 +1590,23 @@ Do directly:
       model: Type.Optional(
         Type.String({
           description:
-            'Optional model override. Accepts "provider/modelId" or fuzzy name (e.g. "haiku", "sonnet"). Overrides the agent type\'s frontmatter model; omit to use the agent type\'s default.',
+            'Optional model override. Accepts "provider/modelId" or fuzzy name (e.g. "haiku", "sonnet").',
         }),
       ),
       thinking: Type.Optional(
         Type.String({
-          description: `Thinking level: ${THINKING_LEVELS.join(", ")}. Overrides the inherited default; an agent type's frontmatter value takes precedence when set.`,
+          description: `Thinking level: ${THINKING_LEVELS.join(", ")}.`,
         }),
       ),
       max_turns: Type.Optional(
         Type.Number({
-          description: "Maximum number of agentic turns before stopping. Omit for unlimited (default).",
+          description: "Maximum number of agentic turns before stopping.",
           minimum: 1,
         }),
       ),
       max_context_length: Type.Optional(
         Type.Number({
-          description: "Maximum estimated context tokens before wrapping up (measured at turn boundaries). Omit for the default (125k).",
+          description: "Maximum estimated context tokens before wrapping up (measured at turn boundaries).",
           minimum: 1,
         }),
       ),
@@ -1666,7 +1622,7 @@ Do directly:
       ),
       inherit_context: Type.Optional(
         Type.Boolean({
-          description: "If true, fork parent conversation into the agent. Default: false (fresh context).",
+          description: "If true, fork parent conversation into the agent.",
         }),
       ),
       ...scheduleParam,
@@ -2783,8 +2739,6 @@ Do directly:
       // without a restart (or an unrelated spawn).
       reloadCustomAgents();
       switch (params.sub) {
-        case "guidelines":
-          return textResult(fullAgentToolDescription);
         case "create": {
           const projectDir = join(process.cwd(), ".pi", "agents");
           const personalDir = join(getAgentDir(), "agents");
@@ -2902,7 +2856,7 @@ Do directly:
           );
         }
         default:
-          return textResult(`Unknown sub: "${params.sub}". Valid values: guidelines, create, list, info`);
+          return textResult(`Unknown sub: "${params.sub}". Valid values: create, list, info`);
       }
     },
   }));
